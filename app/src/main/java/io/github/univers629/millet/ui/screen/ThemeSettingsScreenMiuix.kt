@@ -159,7 +159,6 @@ fun ThemeSettingsScreenMiuix(
                     color = barColor,
                     title = "外观个性化",
                     scrollBehavior = scrollBehavior,
-                    contentScrolledSignal = { pageListState.canScrollBackward },
                     navigationIcon = {
                         BarIconButton(onClick = onBack) {
                             val layoutDirection = LocalLayoutDirection.current

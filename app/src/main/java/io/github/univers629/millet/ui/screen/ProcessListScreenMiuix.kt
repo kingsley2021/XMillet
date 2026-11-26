@@ -183,7 +183,6 @@ fun ProcessListContent(
                         )
                     },
                     scrollBehavior = scrollBehavior,
-                    contentScrolledSignal = { pageListState.canScrollBackward },
                 )
             }
         },

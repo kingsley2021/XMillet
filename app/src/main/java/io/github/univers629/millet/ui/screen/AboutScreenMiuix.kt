@@ -216,7 +216,6 @@ fun AboutScreenMiuix(
                 MilletSmallTopAppBar(
                     title = "关于",
                     scrollBehavior = topAppBarScrollBehavior,
-                    contentScrolledSignal = { lazyListState.canScrollBackward },
                     color = when {
                         scrollProgress < 1f -> colorScheme.surface.copy(alpha = 0f)
                         LocalEnableBlur.current -> Color.Transparent
@@ -622,7 +621,6 @@ fun AboutKnowledgeScreenMiuix(
                 MilletSmallTopAppBar(
                     title = "墓碑与冻结机制解析",
                     scrollBehavior = topAppBarScrollBehavior,
-                    contentScrolledSignal = { lazyListState.canScrollBackward },
                     navigationIcon = {
                         BarIconButton(
                             icon = MiuixIcons.Glass.Back,
@@ -721,7 +719,6 @@ fun AboutRepoScreenMiuix(
                 MilletSmallTopAppBar(
                     title = "开源地址",
                     scrollBehavior = topAppBarScrollBehavior,
-                    contentScrolledSignal = { repoListState.canScrollBackward },
                     navigationIcon = {
                         BarIconButton(
                             icon = MiuixIcons.Glass.Back,
@@ -988,7 +985,6 @@ fun AboutLicensesScreenMiuix(
                 MilletSmallTopAppBar(
                     title = "开源代码许可",
                     scrollBehavior = topAppBarScrollBehavior,
-                    contentScrolledSignal = { licensesListState.canScrollBackward },
                     navigationIcon = {
                         BarIconButton(
                             icon = MiuixIcons.Glass.Back,

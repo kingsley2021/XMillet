@@ -249,7 +249,6 @@ fun AppProfileContent(
                         )
                     },
                     scrollBehavior = scrollBehavior,
-                    contentScrolledSignal = { pageListState.canScrollBackward },
                 )
             }
         },

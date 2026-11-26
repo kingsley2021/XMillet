@@ -78,17 +78,6 @@ fun MilletTopAppBar(
      * - 高斯模糊 / 关闭模糊：色带完全透明，任何时候都不出现。
      */
     bandless: Boolean = false,
-    /**
-     * 内容是否已滑到顶栏下方的信号（必须传 `listState.canScrollBackward` 一类的页面级状态）。
-     *
-     * miuix 的官方建议就是用列表的 `canScrollBackward` 表示顶栏按钮的浮起态；只看
-     * [ScrollBehavior] 的 `contentOffset`／`overscrollOffset` 时，这两个值是以 px 计的累计量，
-     * 系统「最小宽度 / DPI」改变后 density 随之变化，轻量滚动可能凑不满原先写死的 1px 阈值
-     * （位移还会被 overscroll / PullToRefresh 吸收），于是圆形液态玻璃再也不浮起。
-     *
-     * 这里不给默认值：任何顶栏都必须显式说明自己的滚动来源，避免新页面再漏接。
-     */
-    contentScrolledSignal: () -> Boolean,
 ) {
     val backdrop = LocalBarBackdrop.current
     val progressive = LocalEnableProgressiveBlur.current && backdrop != null
@@ -106,21 +95,11 @@ fun MilletTopAppBar(
         color.isSpecified -> GlassTopAppBarDefaults.bandBrush(color)
         else -> GlassTopAppBarDefaults.bandBrush(MiuixTheme.colorScheme.surface)
     }
-    // 与 Miuix 一致：只有内容下滑到顶栏下方、且顶栏走渐进式模糊时，按钮才浮起圆形液态玻璃。
-    // 关闭模糊或只用整块毛玻璃时保持纯图标，同时不再让顶栏采样按钮背景。
-    // 判定统一用「列表已滚过顶部」（density / 窗口宽度无关）+ 滚动偏移兜底，不再依赖 px 阈值；
-    // 另外把「某个按钮的菜单正展开」也算作浮起态（见 BarGlassActivationState），
-    // 这样内容刚好一屏、或系统最小宽度调大后不再溢出的页面，从按钮展开菜单时仍有圆形液态玻璃锚点。
+    // 顶栏按钮的圆形液态玻璃是顶栏自身的材质，与内容是否滚过顶部无关：
+    // 背景模糊开启且有采样源时按钮常驻圆形玻璃；关闭模糊时退回纯图标。
+    // 菜单展开期间额外强制浮起，保证 popup 有可见的圆形锚点。
     val activation = remember { BarGlassActivationState() }
-    val scrollState = scrollBehavior?.state
-    val listScrolled = contentScrolledSignal()
-    val contentScrolled = listScrolled ||
-        activation.activeCount > 0 ||
-        (scrollState != null && (scrollState.contentOffset < 0f || scrollState.overscrollOffset < 0f))
-    // 菜单展开时必须给出圆形锚点：顶栏按钮的材质由 GlassIconButton 从顶栏上下文取
-    // floating；非渐进式（高斯模糊档位 / 无采样源）的顶栏若不例外放行，弹出菜单只剩
-    // 一片透明，即 popup 按钮没有材质。
-    val floating = (progressive && contentScrolled) || activation.activeCount > 0
+    val floating = activation.activeCount > 0 || (blurEnabled && backdrop != null)
     CompositionLocalProvider(
         LocalBarGlassActivationState provides activation,
         LocalBarGlassFloating provides floating,
@@ -157,9 +136,9 @@ fun MilletTopAppBar(
 /**
  * 顶栏玻璃按钮的「菜单展开 / 按住」计数。
  *
- * 顶栏的圆形液态玻璃浮起态只看「页面是否滚过顶部」时，内容刚好一屏（或系统最小宽度调大后内容
- * 不再溢出）的页面永远不会浮起，于是从顶栏按钮展开的玻璃菜单没有圆形锚点可变形。
- * [BarIconButton] 的 holdDownState 汇总到这里，让顶栏在菜单展开期间按浮起态绘制。
+ * 顶栏按钮的圆形液态玻璃常驻（见 [MilletTopAppBar] 的 floating 计算），但菜单展开的那一帧
+ * 仍要额外强制浮起：popup 需要从一个可见的圆形锚点变形展开，否则会从一片透明里长出来。
+ * [BarIconButton] 的 holdDownState 汇总到这里。
  */
 private class BarGlassActivationState {
     var activeCount by mutableIntStateOf(0)
@@ -168,7 +147,7 @@ private class BarGlassActivationState {
 /** 当前顶栏下已展开菜单的按钮数量；不在顶栏内时为 null。 */
 private val LocalBarGlassActivationState = compositionLocalOf<BarGlassActivationState?> { null }
 
-/** 顶栏是否处于浮起态（渐进模糊 + 已滚过顶部 / 菜单展开），供顶栏按钮同步菜单锚点。 */
+/** 顶栏是否处于浮起态（模糊开启时常驻，菜单展开时强制），供顶栏按钮同步菜单锚点。 */
 private val LocalBarGlassFloating = compositionLocalOf { false }
 
 /** 顶栏玻璃按钮之间的间距，与 Miuix Glass 示例页保持一致。 */
@@ -186,7 +165,6 @@ fun MilletSmallTopAppBar(
     actions: @Composable RowScope.() -> Unit = {},
     scrollBehavior: ScrollBehavior? = null,
     defaultWindowInsetsPadding: Boolean = true,
-    contentScrolledSignal: () -> Boolean,
     bandless: Boolean = false,
 ) = MilletTopAppBar(
     title = title,
@@ -199,7 +177,6 @@ fun MilletSmallTopAppBar(
     actions = actions,
     scrollBehavior = scrollBehavior,
     defaultWindowInsetsPadding = defaultWindowInsetsPadding,
-    contentScrolledSignal = contentScrolledSignal,
     bandless = bandless,
 )
 

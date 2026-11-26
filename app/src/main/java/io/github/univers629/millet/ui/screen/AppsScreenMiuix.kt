@@ -266,7 +266,6 @@ fun AppsContent(
                         )
                     },
                     scrollBehavior = scrollBehavior,
-                    contentScrolledSignal = { pageListState.canScrollBackward },
                 )
             }
         },
