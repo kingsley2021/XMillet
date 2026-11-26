@@ -57,9 +57,12 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -146,8 +149,32 @@ internal fun PolicySubPageScaffold(
     val scrollBehavior = MiuixScrollBehavior()
     val subPageListState = rememberLazyListState()
     val fallbackTabBackdrop = rememberLayerBackdrop()
+    // 这一页内容常不满一屏，列表本身滚不动；此时「正在拖动」是页面唯一能提供的重叠信号，
+    // 与 OOBE 权限页同一套兜底：已滚过顶部 || 正在拖动，静止时仍是纯图标。
+    // 但只认「向上推内容」这一侧：下拉（含顶部回弹）时顶栏按钮不该浮起圆形液态玻璃。
+    // 方向由挂在列表上的探针从 nested scroll 的 preScroll 里读，探针只观察不消费。
+    var dragUp by remember { mutableStateOf(false) }
+    val dragDirectionProbe = remember {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput) {
+                    if (available.y < 0f) dragUp = true else if (available.y > 0f) dragUp = false
+                }
+                return Offset.Zero
+            }
+
+            override fun onPostScroll(
+                consumed: Offset,
+                available: Offset,
+                source: NestedScrollSource,
+            ): Offset = Offset.Zero
+        }
+    }
+    val contentScrolled = {
+        subPageListState.canScrollBackward || (subPageListState.isScrollInProgress && dragUp)
+    }
     val contentUnderTopBar by remember(subPageListState) {
-        derivedStateOf { subPageListState.canScrollBackward }
+        derivedStateOf { contentScrolled() }
     }
     val enableBlur = LocalEnableBlur.current
     val backdrop = rememberBlurBackdrop(enableBlur)
@@ -177,6 +204,7 @@ internal fun PolicySubPageScaffold(
                     },
                     actions = actions,
                     scrollBehavior = scrollBehavior,
+                    contentScrolledSignal = contentScrolled,
                     bottomContent = {
                         bottomContent?.invoke(backdrop ?: fallbackTabBackdrop, blurActive && contentUnderTopBar)
                     },
@@ -193,7 +221,10 @@ internal fun PolicySubPageScaffold(
                     .padding(top = 12.dp)
                     .scrollEndHaptic()
                     .overScrollVertical()
-                    .nestedScroll(scrollBehavior.nestedScrollConnection),
+                    .nestedScroll(scrollBehavior.nestedScrollConnection)
+                    // 探针放在链条最内层：先于任何父级消费看到完整的用户位移，方向判断不受 overscroll /
+                    // scrollBehavior 的消费影响；它自身不消费（全部返回 Offset.Zero）。
+                    .nestedScroll(dragDirectionProbe),
                 contentPadding = innerPadding,
                 overscrollEffect = null
             ) {

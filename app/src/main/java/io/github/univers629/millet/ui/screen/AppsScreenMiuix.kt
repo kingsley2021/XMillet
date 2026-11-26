@@ -28,13 +28,13 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -204,6 +204,7 @@ fun AppsContent(
     onBack: (() -> Unit)? = null,
 ) {
     val scrollBehavior = MiuixScrollBehavior()
+    val pageListState = rememberLazyListState()
     val enableBlur = LocalEnableBlur.current
     val backdrop = rememberBlurBackdrop(enableBlur)
     val blurActive = backdrop != null
@@ -264,7 +265,8 @@ fun AppsContent(
                             }
                         )
                     },
-                    scrollBehavior = scrollBehavior
+                    scrollBehavior = scrollBehavior,
+                    contentScrolledSignal = { pageListState.canScrollBackward },
                 )
             }
         },
@@ -281,6 +283,7 @@ fun AppsContent(
                 ),
             ) {
                 LazyColumn(
+                    state = pageListState,
                     modifier = Modifier
                         .fillMaxSize()
                         .scrollEndHaptic()
@@ -370,15 +373,21 @@ internal fun MiuixCapsuleSearchBar(
     topPadding: Dp = 8.dp,
     bottomPadding: Dp = 4.dp,
 ) {
-    // Miuix InputField：expanded 只在获得焦点后置为 true 且不再回落，
-    // 避免组件在 expanded=false 时自动清空查询词（列表页搜索需要保留结果）。
-    var expanded by rememberSaveable { mutableStateOf(false) }
+    // Miuix InputField 只要 expanded == true 就会无条件 requestFocus（见 SearchBar 里的
+    // LaunchedEffect(expanded)）。把 expanded 存进 rememberSaveable 且只允许置 true 时，
+    // 列表把搜索栏滑出视口再滑回来会恢复成 true → 抢焦点 → 弹键盘 + bring-into-view 吸附。
+    // 这里改成普通 remember 且允许回落：只有用户主动点搜索框才展开。
+    var expanded by remember { mutableStateOf(false) }
     InputField(
         query = query,
-        onQueryChange = onQueryChange,
+        onQueryChange = { value ->
+            // 折叠时 Miuix 会回调 onQueryChange("") 清空文本，这种被动清空要忽略，
+            // 否则列表页的查询结果会在搜索框收起后被一起清掉；用户手动删空时 expanded 仍为 true。
+            if (value.isNotEmpty() || expanded) onQueryChange(value)
+        },
         onSearch = { },
         expanded = expanded,
-        onExpandedChange = { if (it) expanded = true },
+        onExpandedChange = { expanded = it },
         label = placeholder.removeSuffix("...").removeSuffix("…"),
         modifier = Modifier
             .fillMaxWidth()
@@ -644,8 +653,8 @@ private fun PolicyEntryCard(
             Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(
                     text = title,
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
+                    fontSize = 17.sp,
+                    fontWeight = FontWeight.Bold,
                     color = colorScheme.onSurface,
                     maxLines = 1,
                 )

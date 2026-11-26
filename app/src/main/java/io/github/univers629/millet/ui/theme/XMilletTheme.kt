@@ -40,6 +40,8 @@ import androidx.navigationevent.findViewTreeNavigationEventDispatcherOwner
 import androidx.navigationevent.setViewTreeNavigationEventDispatcherOwner
 import androidx.navigationevent.toNavigationEvent
 import io.github.univers629.millet.ui.model.TombSection
+import io.github.univers629.millet.ui.util.CardClickLock
+import io.github.univers629.millet.ui.util.LocalCardClickLock
 import io.github.univers629.millet.core.PrefReader
 import io.github.univers629.millet.core.PrefsDefaults
 import io.github.univers629.millet.core.PrefsKeys
@@ -208,6 +210,26 @@ class UiThemeState(private val prefs: SharedPreferences) {
     var enableProgressiveBlur by mutableStateOf(prefs.getBoolean(KEY_PROGRESSIVE_BLUR, true))
         private set
 
+    /**
+     * 统一模糊档位：关闭 / 高斯 / 渐进。由 [enableBlur] 与 [enableProgressiveBlur] 两个持久化键推导，
+     * 写入统一走 [updateBlurMode]，保证界面各处读到的是同一个值。
+     */
+    val blurMode: BlurMode
+        get() = when {
+            !enableBlur -> BlurMode.Off
+            enableProgressiveBlur -> BlurMode.Progressive
+            else -> BlurMode.Gaussian
+        }
+
+    fun updateBlurMode(mode: BlurMode) {
+        enableBlur = mode.enabled
+        enableProgressiveBlur = mode.progressive
+        prefs.edit()
+            .putBoolean(KEY_ENABLE_BLUR, mode.enabled)
+            .putBoolean(KEY_PROGRESSIVE_BLUR, mode.progressive)
+            .apply()
+    }
+
     fun updateEnableProgressiveBlur(enabled: Boolean) {
         enableProgressiveBlur = enabled
         prefs.edit().putBoolean(KEY_PROGRESSIVE_BLUR, enabled).apply()
@@ -338,6 +360,8 @@ fun XMilletMiuixTheme(
     val systemDark = isSystemInDarkTheme()
     val colorMode = themeState.effectiveColorMode
     val isDark = isInDarkTheme(colorMode, systemDark)
+    // 全局卡片点击锁：跳转与折叠动画期间忽略其它卡片点击，避免连点触发多次跳转。
+    val cardClickLock = remember { CardClickLock() }
 
     val dynamicSeedColor: Color? = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
         if (themeState.keyColor == 0) {
@@ -489,11 +513,13 @@ fun XMilletMiuixTheme(
         CompositionLocalProvider(
             LocalNavigationEventDispatcherOwner provides navOwner,
             LocalColorMode provides colorMode,
-            LocalEnableBlur provides themeState.enableBlur,
+            LocalBlurMode provides themeState.blurMode,
+            LocalCardClickLock provides cardClickLock,
+            LocalEnableBlur provides themeState.blurMode.enabled,
             LocalEnableFloatingBottomBar provides themeState.enableFloatingBottomBar,
             LocalEnableFloatingBottomBarBlur provides themeState.enableFloatingBottomBarBlur,
             LocalFloatingBottomBarStyle provides themeState.floatingBottomBarStyle,
-            LocalEnableProgressiveBlur provides themeState.enableProgressiveBlur,
+            LocalEnableProgressiveBlur provides themeState.blurMode.progressive,
         ) {
             content()
         }

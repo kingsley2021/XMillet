@@ -79,6 +79,8 @@ import io.github.univers629.millet.ui.theme.UiThemeState
 import io.github.univers629.millet.ui.theme.XMilletMiuixTheme
 import io.github.univers629.millet.ui.util.AppUpdateController
 import io.github.univers629.millet.ui.util.AppUpdateDownloadState
+import io.github.univers629.millet.ui.util.CardClickLock
+import io.github.univers629.millet.ui.util.LocalCardClickLock
 import io.github.univers629.millet.ui.util.PopupBackdropHolder
 import io.github.univers629.millet.ui.util.rememberBlurBackdrop
 import io.github.univers629.millet.ui.vm.MainShellViewModel
@@ -147,12 +149,17 @@ class MainActivity : ComponentActivity() {
 
     private class Navigator(
         val backStack: NavBackStack,
+        private val clickLock: CardClickLock,
     ) {
+        /**
+         * 压栈。转场动画未播完时（[CardClickLock.NavigationWindowMillis] 窗口内）直接忽略，
+         * 避免卡片连点在动画过程中又跳一次页面。
+         */
         fun push(key: NavKey) {
             val identity = routeIdentity(key)
-            if (backStack.none { routeIdentity(it) == identity }) {
-                backStack.add(key)
-            }
+            if (backStack.any { routeIdentity(it) == identity }) return
+            if (!clickLock.tryAcquire(CardClickLock.NavigationWindowMillis)) return
+            backStack.add(key)
         }
 
         fun routeIdentity(key: NavKey): Any = when (key) {
@@ -170,9 +177,9 @@ class MainActivity : ComponentActivity() {
     }
 
     @Composable
-    private fun rememberNavigator(startRoute: Route): Navigator {
+    private fun rememberNavigator(startRoute: Route, clickLock: CardClickLock): Navigator {
         val backStack = rememberNavBackStack<Route>(startRoute)
-        return remember(backStack) { Navigator(backStack) }
+        return remember(backStack, clickLock) { Navigator(backStack, clickLock) }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -247,7 +254,9 @@ class MainActivity : ComponentActivity() {
     private fun MainActivityContent(shellVm: MainShellViewModel) {
         val container = remember { appUiContainer }
         val themeState = shellVm.themeState
-        val navigator = rememberNavigator(Route.Main)
+        // 激活状态决定底栏 Tab 数量与几处界面的可见性，必须在使用它的 destinations 之前收集。
+        val isActivated by shellVm.activatedFlow.collectAsStateWithLifecycle()
+        val navigator = rememberNavigator(Route.Main, LocalCardClickLock.current)
         val navStoreRegistry: NavEntryStoreRegistry = viewModel { NavEntryStoreRegistry() }
         val processListVm: ProcessListViewModel = viewModel {
             ProcessListViewModel(container.runtimeAndAppsRepository)
@@ -261,8 +270,8 @@ class MainActivity : ComponentActivity() {
             shellVm.onRouteChanged(currentRoute == Route.Main)
         }
 
-        val destinations = remember(themeState.showTombStatsTab) {
-            BottomBarDestination.visible(themeState.showTombStatsTab)
+        val destinations = remember(themeState.showTombStatsTab, isActivated) {
+            BottomBarDestination.visible(themeState.showTombStatsTab, isActivated)
         }
         val pagerState = rememberPagerState(initialPage = 0, pageCount = { destinations.size })
         val mainPagerState =
@@ -469,7 +478,8 @@ class MainActivity : ComponentActivity() {
                                                 else Modifier
                                             )
                                             .then(
-                                                if (floatingBottomBarStyle != 0) {
+                                                // 统一模糊开关：只有开启模糊时才录制底栏采样源
+                                                if (floatingBottomBarStyle != 0 && enableBlur) {
                                                     Modifier.layerBackdrop(backdrop)
                                                 } else {
                                                     Modifier
@@ -494,6 +504,7 @@ class MainActivity : ComponentActivity() {
                                                 onOpenAbout = { navigator.push(Route.About) },
                                                 onOpenAppProfile = openProfileByTarget,
                                                 onOpenApps = { navigator.push(Route.Apps) },
+                                                isActivated = isActivated,
                                             )
 
                                             BottomBarDestination.Processes -> ProcessListRoute(
@@ -519,6 +530,7 @@ class MainActivity : ComponentActivity() {
                                                 onOpenAppearance = { navigator.push(Route.Appearance) },
                                                 onOpenOobe = { navigator.push(Route.Oobe) },
                                                 onOpenAbout = { navigator.push(Route.About) },
+                                                isActivated = isActivated,
                                             )
 
                                             null -> Unit
@@ -551,7 +563,8 @@ class MainActivity : ComponentActivity() {
                             entry<Route.Appearance>(swipeDismiss = swipeDismiss) {
                                 ThemeSettingsScreenMiuix(
                                     themeState = themeState,
-                                    onBack = { navigator.pop() }
+                                    onBack = { navigator.pop() },
+                                    isActivated = isActivated,
                                 )
                             }
 

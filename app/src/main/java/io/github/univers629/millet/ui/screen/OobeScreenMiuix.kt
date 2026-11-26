@@ -1,6 +1,7 @@
 package io.github.univers629.millet.ui.screen
-import top.yukonga.miuix.kmp.glass.GlassIconButton
 import io.github.univers629.millet.ui.util.MilletSmallTopAppBar
+import io.github.univers629.millet.ui.util.BlurredBar
+import io.github.univers629.millet.ui.util.BarIconButton
 
 import android.content.Intent
 import android.net.Uri
@@ -35,9 +36,9 @@ import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
@@ -66,6 +67,7 @@ import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.LayoutCoordinates
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.findRootCoordinates
@@ -89,6 +91,7 @@ import io.github.univers629.millet.core.LsposedHelper
 import io.github.univers629.millet.ui.component.StatusTagMiuix
 import io.github.univers629.millet.ui.component.effect.BgEffectBackground
 import io.github.univers629.millet.ui.component.effect.GlowBackground
+import io.github.univers629.millet.ui.theme.LocalEnableBlur
 import io.github.univers629.millet.ui.util.rememberBlurBackdrop
 import kotlin.math.hypot
 import kotlinx.coroutines.Dispatchers
@@ -120,6 +123,7 @@ import top.yukonga.miuix.kmp.icon.glass.Widget
 import top.yukonga.miuix.kmp.icon.basic.Check
 import top.yukonga.miuix.kmp.icon.glass.Back
 import top.yukonga.miuix.kmp.theme.MiuixTheme
+import top.yukonga.miuix.kmp.basic.MiuixScrollBehavior
 import top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme
 import top.yukonga.miuix.kmp.theme.lightColorScheme
 import top.yukonga.miuix.kmp.utils.overScrollVertical
@@ -167,7 +171,7 @@ private class CircleRevealShape(
  * - 深度学研 HyperCeiler provision 模块现代动画与流光设计；
  * - 开场展示 OKLab 色彩空间计算的 Simplex 噪声与开场环形扩散光效（GlowBackground / glow.glsl）；
  * - 第一页的 Logo 图标、应用大标题 XMillet，以及底部的「下一步」右箭头按钮，统一使用「关于」页同款毛玻璃（textureBlur + logoBlend）效果；
- * - 强制常开毛玻璃渲染（不随设置项中的毛玻璃开关改变）；
+ * - 毛玻璃跟随「外观个性化 → 背景模糊」档位：关闭时回退为纯色文字与不透明按钮，左上角返回按钮始终是普通图标按钮；
  * - Logo 缩放入场动画（0.5 -> 0.95 -> 1.0）+ 标题平移渐显 + 底部 70dp 圆形下一步按钮（带延时入场）；
  * - 下一步按钮点击后播放向外扩张平滑衔接动画过渡至权限配置向导页；
  * - 权限配置页遵循规范：盾牌图标、大标题与副标题均不使用 textureBlur；
@@ -186,7 +190,8 @@ fun OobeScreenMiuix(
     val layoutDirection = LocalLayoutDirection.current
     val colorScheme = MiuixTheme.colorScheme
     val isDark = colorScheme.surface.luminance() < 0.5f
-    val startupBackdrop = rememberBlurBackdrop(true)
+    // 统一模糊开关：OOBE 的流光玻璃同样受「背景模糊」档位控制，关闭时回退为纯色/纯字。
+    val startupBackdrop = rememberBlurBackdrop(LocalEnableBlur.current)
 
     var currentStep by rememberSaveable { mutableStateOf(OobeStep.Startup) }
     var isTransitioning by remember { mutableStateOf(false) }
@@ -234,6 +239,36 @@ fun OobeScreenMiuix(
         contract = ActivityResultContracts.RequestPermission()
     ) { granted ->
         canReadApps = granted || AppListPermissionHelper.canReadInstalledApps(context)
+    }
+
+    // 应用列表权限入口：系统支持时走运行时权限对话框，否则回退到本应用详情页手动授权
+    val requestAppListPermission: () -> Unit = {
+        if (AppListPermissionHelper.isSupported(context)) {
+            appListPermissionLauncher.launch(AppListPermissionHelper.PERMISSION)
+        } else {
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.fromParts("package", context.packageName, null)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            runCatching { context.startActivity(intent) }
+        }
+    }
+
+    // 打开 LSPosed 管理器并反馈结果：openModuleList 内部可能走 su，放到 IO 线程；Toast 回主线程弹出。
+    // 返回本页时靠 ON_RESUME 观察者重新刷新 isLspActive，这里不加轮询。
+    val openLspManager: () -> Unit = {
+        coroutineScope.launch {
+            val requested = withContext(Dispatchers.IO) { LsposedHelper.openModuleList(context) }
+            Toast.makeText(
+                context,
+                if (requested) {
+                    "已打开 LSPosed 管理器，请在模块列表中找到 XMillet 并启用（作用域：系统框架 + 电量与性能）"
+                } else {
+                    "未找到 LSPosed 管理器，请手动打开并启用 XMillet"
+                },
+                if (requested) Toast.LENGTH_LONG else Toast.LENGTH_SHORT
+            ).show()
+        }
     }
 
     // 仅在进入权限配置页（Permissions）时才自动触发申请，避免在 Startup 入场动画期间弹窗打断体验
@@ -334,6 +369,16 @@ fun OobeScreenMiuix(
             val permLightColors = remember { lightColorScheme() }
             MiuixTheme(colors = permLightColors) {
                 val colorScheme = permLightColors
+                // 权限页与设置/应用策略子页同一套顶栏实现：页面背景作为采样源，
+                // 顶栏走渐进式模糊，返回键在列表滚过顶部后才浮起圆形液态玻璃。
+                val permBackdrop = rememberBlurBackdrop(LocalEnableBlur.current)
+                val permScrollBehavior = MiuixScrollBehavior()
+                val permListState = rememberLazyListState()
+                // 这一页内容通常不足一屏，列表本身滚不动；此时「往上拖一下」就是页面唯一能提供的
+                // 内容重叠信号，所以浮起态 = 已滚过顶部 || 正在拖动，静止时仍然是纯图标。
+                val permContentScrolled = {
+                    permListState.canScrollBackward || permListState.isScrollInProgress
+                }
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -345,30 +390,32 @@ fun OobeScreenMiuix(
                 ) {
                     Scaffold(
                         topBar = {
-                            // 权限向导顶栏：普通 Miuix IconButton，不使用圆形液态玻璃底
-                            MilletSmallTopAppBar(
-                                title = "",
-                                color = Color.Transparent,
-                                titleColor = colorScheme.onSurface,
-                                navigationIcon = {
-                                    IconButton(
-                                        onClick = { currentStep = OobeStep.Startup },
-                                    ) {
-                                        Icon(
-                                            imageVector = MiuixIcons.Glass.Back,
+                            BlurredBar(permBackdrop, blurActive = permBackdrop != null) {
+                                MilletSmallTopAppBar(
+                                    title = "",
+                                    color = Color.Transparent,
+                                    titleColor = colorScheme.onSurface,
+                                    scrollBehavior = permScrollBehavior,
+                                    contentScrolledSignal = permContentScrolled,
+                                    navigationIcon = {
+                                        BarIconButton(
+                                            icon = MiuixIcons.Glass.Back,
                                             contentDescription = "返回欢迎页",
-                                            tint = colorScheme.onSurface,
-                                            modifier = Modifier.size(28.dp),
+                                            onClick = { currentStep = OobeStep.Startup },
                                         )
-                                    }
-                                },
-                            )
+                                    },
+                                )
+                            }
                         },
                     ) { innerPadding ->
                         BgEffectBackground(
                             dynamicBackground = true,
                             isOs3Effect = true,
-                            modifier = Modifier.fillMaxSize(),
+                            // 采样源必须录在整页这一层：动态背景 + 列表 + 底部按钮。
+                            // 只录背景 Spacer 时顶栏的渐进模糊只能采到一层平滑渐变，看不到内容向下渐隐。
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .then(permBackdrop?.let { Modifier.layerBackdrop(it) } ?: Modifier),
                             effectBackground = true,
                             isDarkTheme = false, // 严格保持浅色模式
                             alpha = { 1f },
@@ -382,18 +429,27 @@ fun OobeScreenMiuix(
                                     .fillMaxSize()
                                     .widthIn(max = 640.dp)
                             ) {
+                                // 红 / 黄权限提示按钮（红优先）会再多占一行固定高度，
+                                // 内容区底部留白同步加高，避免提示按钮压住最后一张卡片
+                                val bottomHintCount = when {
+                                    !isLspActive -> 1
+                                    !canReadApps -> 1
+                                    else -> 0
+                                }
                                 val listContentPadding = PaddingValues(
                                     start = horizontalSafeInsets.calculateStartPadding(layoutDirection) + displayCutoutInsets.calculateLeftPadding(layoutDirection) + 12.dp,
                                     top = innerPadding.calculateTopPadding() + 8.dp,
                                     end = horizontalSafeInsets.calculateEndPadding(layoutDirection) + displayCutoutInsets.calculateRightPadding(layoutDirection) + 12.dp,
-                                    bottom = navBarPadding + 96.dp,
+                                    bottom = navBarPadding + 96.dp + 62.dp * bottomHintCount,
                                 )
 
                                 LazyColumn(
+                                    state = permListState,
                                     modifier = Modifier
                                         .fillMaxSize()
                                         .scrollEndHaptic()
-                                        .overScrollVertical(),
+                                        .overScrollVertical()
+                                        .nestedScroll(permScrollBehavior.nestedScrollConnection),
                                     contentPadding = listContentPadding,
                                     horizontalAlignment = Alignment.CenterHorizontally
                                 ) {
@@ -476,11 +532,7 @@ fun OobeScreenMiuix(
                                                     if (isLspActive) {
                                                         Toast.makeText(context, "LSPosed 模块已激活并握手成功", Toast.LENGTH_SHORT).show()
                                                     } else {
-                                                        coroutineScope.launch {
-                                                            withContext(Dispatchers.IO) {
-                                                                LsposedHelper.openModuleList(context)
-                                                            }
-                                                        }
+                                                        openLspManager()
                                                     }
                                                 }
                                             )
@@ -514,15 +566,7 @@ fun OobeScreenMiuix(
                                                     if (canReadApps) {
                                                         Toast.makeText(context, "已获得读取应用列表权限", Toast.LENGTH_SHORT).show()
                                                     } else {
-                                                        if (AppListPermissionHelper.isSupported(context)) {
-                                                            appListPermissionLauncher.launch(AppListPermissionHelper.PERMISSION)
-                                                        } else {
-                                                            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                                                                data = Uri.fromParts("package", context.packageName, null)
-                                                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                                            }
-                                                            runCatching { context.startActivity(intent) }
-                                                        }
+                                                        requestAppListPermission()
                                                     }
                                                 }
                                             )
@@ -530,8 +574,8 @@ fun OobeScreenMiuix(
                                     }
                                 }
 
-                                // 3. 底部固定的“完成”主操作按钮
-                                Box(
+                                // 3. 底部固定区：权限缺失提示（红 / 黄，红优先）+ 主操作“完成”按钮
+                                Column(
                                     modifier = Modifier
                                         .align(Alignment.BottomCenter)
                                         .fillMaxWidth()
@@ -541,6 +585,24 @@ fun OobeScreenMiuix(
                                             bottom = navBarPadding + 16.dp
                                         )
                                 ) {
+                                    if (!isLspActive) {
+                                        OobePermissionWarningButton(
+                                            text = "没有获取到权限，应用将为未激活状态",
+                                            containerColor = Color(0xFFE23B2E),
+                                            contentColor = Color.White,
+                                            onClick = openLspManager,
+                                        )
+                                        Spacer(Modifier.height(10.dp))
+                                    } else if (!canReadApps) {
+                                        OobePermissionWarningButton(
+                                            text = "没有获取到应用列表权限，无法显示具体应用",
+                                            containerColor = Color(0xFFF2A93B),
+                                            contentColor = Color(0xFF3A2A00),
+                                            onClick = requestAppListPermission,
+                                        )
+                                        Spacer(Modifier.height(10.dp))
+                                    }
+
                                     Button(
                                         onClick = onComplete,
                                         modifier = Modifier
@@ -579,7 +641,10 @@ fun OobeScreenMiuix(
  * - 底部 70dp 圆形下一步按钮（CircleShape），流光毛玻璃球体 + 纯白右箭头（ic_oobe_arrow），点击后向外扩张并平滑进入权限配置向导；
  * - 竖向布局严格对齐 HyperCeiler 30 : 40 : 20 黄金比例；
  * - 入场动画：图标缩放入场（0.5 -> 1.0）与渐显，标题下落渐显（translationY +60dp -> 0dp），下一步按钮延时 1200ms 弹出。
+ *
+ * 第一页不再提供左上角返回按钮（仅系统返回键生效），isPreview / onBack 仅为对外签名保留。
  */
+@Suppress("UNUSED_PARAMETER")
 @Composable
 private fun OobeStartupContent(
     isPreview: Boolean,
@@ -656,24 +721,6 @@ private fun OobeStartupContent(
         circleYOffset = circleYOffset,
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
-            if (isPreview) {
-                GlassIconButton(
-                    onClick = onBack,
-                    backdrop = backdrop,
-                    modifier = Modifier
-                        .statusBarsPadding()
-                        .padding(start = 12.dp, top = 8.dp)
-                        .align(Alignment.TopStart)
-                ) {
-                    Icon(
-                        imageVector = MiuixIcons.Glass.Back,
-                        contentDescription = "返回",
-                        tint = Color.White,
-                        modifier = Modifier.size(28.dp)
-                    )
-                }
-            }
-
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -877,6 +924,43 @@ private fun OobeStartupContent(
                 Spacer(modifier = Modifier.weight(0.20f))
             }
         }
+    }
+}
+
+/**
+ * 权限缺失提示按钮（向导权限页底部）：与「完成」同宽同高。
+ * 红色 = 模块未激活 / 作用域未生效，点击去 LSPosed 管理器；黄色 = 应用列表权限缺失，点击重新授权。
+ * 高度固定 52dp 且允许两行文案，因此收窄 Miuix Button 默认的竖向内边距，避免文字被裁切。
+ */
+@Composable
+private fun OobePermissionWarningButton(
+    text: String,
+    containerColor: Color,
+    contentColor: Color,
+    onClick: () -> Unit,
+) {
+    Button(
+        onClick = onClick,
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(52.dp),
+        cornerRadius = 16.dp,
+        colors = ButtonDefaults.buttonColors(
+            color = containerColor,
+            contentColor = contentColor,
+        ),
+        insideMargin = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+    ) {
+        Text(
+            text = text,
+            modifier = Modifier.fillMaxWidth(),
+            color = contentColor,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            lineHeight = 18.sp,
+            textAlign = TextAlign.Center,
+            maxLines = 2,
+        )
     }
 }
 

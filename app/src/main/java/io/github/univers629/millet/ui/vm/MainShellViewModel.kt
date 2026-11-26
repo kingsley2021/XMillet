@@ -46,6 +46,23 @@ class MainShellViewModel(
             initialValue = runtimeRepo.runtimeStatusFlow.value.binderAlive,
         )
 
+    /**
+     * 系统服务是否已激活：Binder 已连上，且 system_server 侧冻结闸门已就绪（或 PowerKeeper 客户端已注册）。
+     * 判据与主页 [io.github.univers629.millet.ui.screen.HomeScreenMiuix] 状态卡的 `isWorking` 完全一致，
+     * 未激活时底栏、主页统计卡、设置页策略组、外观页墓碑统计开关一并收起来。
+     */
+    val activatedFlow: StateFlow<Boolean> = runtimeRepo.runtimeStatusFlow
+        .map { it.binderAlive && (it.greezeReady || it.powerKeeperConnected) }
+        .distinctUntilChanged()
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000L),
+            // 首帧直接按当前快照算，避免先画一帧「未激活」再跳回「已激活」的闪烁。
+            initialValue = runtimeRepo.runtimeStatusFlow.value.let {
+                it.binderAlive && (it.greezeReady || it.powerKeeperConnected)
+            },
+        )
+
     init {
         viewModelScope.launch {
             policyRepo.prefsFlow.collect { snapshot ->

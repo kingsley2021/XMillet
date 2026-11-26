@@ -55,21 +55,26 @@ import top.yukonga.miuix.kmp.glass.GlassSegmentedTabRow
 private enum class CloudWhitelistTab(
     val title: String,
     val configKey: String,
+    /** 界面上展示的名单键名：首字母大写（系统云端配置库里是驼峰 / 小驼峰）。 */
+    val displayKey: String,
     val description: String,
 ) {
     DOZE(
         title = "云免冻",
         configKey = "dozeWhiteListApps",
+        displayKey = "DozeWhiteListApps",
         description = "Doze 深度休眠云端白名单：进入深度休眠时由系统豁免的应用。",
     ),
     FROZEN(
         title = "云墓碑白",
         configKey = "FrozenNewWhiteList",
+        displayKey = "FrozenNewWhiteList",
         description = "新版墓碑云端白名单：PowerKeeper / Greezer 官方默认免冻结名单。",
     ),
     LAUNCH(
         title = "云启动放行",
         configKey = "launchRestrict",
+        displayKey = "LaunchRestrict",
         description = "启动限制云端放行名单：受限时段内仍允许后台启动的应用。",
     );
 
@@ -330,9 +335,9 @@ private fun CloudWhitelistContent(
                         horizontalArrangement = Arrangement.spacedBy(6.dp)
                     ) {
                         Text(
-                            text = currentTab.configKey,
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold,
+                            text = currentTab.displayKey,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
                             color = colorScheme.onSurface,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
@@ -373,7 +378,7 @@ private fun CloudWhitelistContent(
                             label = "已装 $installedPkgCount / 共 ${tabPackages.size}",
                             backgroundColor = colorScheme.secondaryContainer,
                             contentColor = colorScheme.onSecondaryContainer,
-                            fontSize = 10.sp
+                            fontSize = 13.sp
                         )
                     }
                     Spacer(Modifier.height(6.dp))

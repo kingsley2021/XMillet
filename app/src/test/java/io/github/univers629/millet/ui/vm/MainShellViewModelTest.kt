@@ -113,6 +113,16 @@ class MainShellViewModelTest {
         // 墓碑统计隐藏时回退到首页
         assertEquals(0, BottomBarDestination.resolvePageIndex(fourTabs, BottomBarDestination.TombStats))
 
+        // 未激活（系统服务没连上 / 冻结闸门未就绪）时底栏只剩「主页」「设置」两个 Tab
+        val inactiveTabs = BottomBarDestination.visible(showTombStats = true, isActivated = false)
+        assertEquals(
+            listOf(BottomBarDestination.Home, BottomBarDestination.Settings),
+            inactiveTabs,
+        )
+        assertEquals(1, BottomBarDestination.resolvePageIndex(inactiveTabs, BottomBarDestination.Settings))
+        assertEquals(0, BottomBarDestination.resolvePageIndex(inactiveTabs, BottomBarDestination.Processes))
+        assertEquals(0, BottomBarDestination.resolvePageIndex(inactiveTabs, BottomBarDestination.TombStats))
+
         // 顶栏支持渐进式模糊：渐进模式下由 GlassTopAppBar 自行绘制，BlurredBar 不叠整块模糊
         assertFalse(shouldApplyUniformBarBlur(blurActive = false, progressiveSupported = true, enableProgressiveBlur = false, hasBackdrop = true))
         assertTrue(shouldApplyUniformBarBlur(blurActive = true, progressiveSupported = true, enableProgressiveBlur = false, hasBackdrop = true))

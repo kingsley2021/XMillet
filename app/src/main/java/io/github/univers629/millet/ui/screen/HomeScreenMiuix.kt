@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.LaunchedEffect
@@ -124,6 +125,8 @@ fun HomeRoute(
     onOpenAbout: () -> Unit,
     onOpenAppProfile: (packageName: String, uid: Int) -> Unit,
     onOpenApps: () -> Unit = {},
+    /** 系统服务是否已激活；未激活时主页只留状态卡与提示卡，隐藏依赖冻结数据的统计看板。 */
+    isActivated: Boolean = true,
 ) {
     val context = LocalContext.current
     val runtimeRepo = remember(context) { context.appUiContainer.runtimeAndAppsRepository }
@@ -143,6 +146,7 @@ fun HomeRoute(
         onOpenAbout = onOpenAbout,
         onOpenAppProfile = onOpenAppProfile,
         snapshotUnavailable = uiState.snapshotUnavailable,
+        isActivated = isActivated,
     )
 }
 
@@ -162,8 +166,11 @@ fun HomeScreenMiuix(
     onOpenAppProfile: (packageName: String, uid: Int) -> Unit = { _, _ -> },
     onOpenApps: () -> Unit = {},
     snapshotUnavailable: Boolean = false,
+    /** 系统服务是否已激活；未激活时不展示依赖冻结统计的「当前已冻结 / 已配置策略」看板。 */
+    isActivated: Boolean = true,
 ) {
     val scrollBehavior = MiuixScrollBehavior()
+    val pageListState = rememberLazyListState()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val enableBlur = LocalEnableBlur.current
@@ -259,7 +266,8 @@ fun HomeScreenMiuix(
                             }
                         )
                     },
-                    scrollBehavior = scrollBehavior
+                    scrollBehavior = scrollBehavior,
+                    contentScrolledSignal = { pageListState.canScrollBackward },
                 )
             }
         },
@@ -267,6 +275,7 @@ fun HomeScreenMiuix(
     ) { innerPadding ->
         Box(modifier = if (backdrop != null) Modifier.layerBackdrop(backdrop) else Modifier) {
             LazyColumn(
+                state = pageListState,
                 modifier = Modifier
                     .fillMaxHeight()
                     .scrollEndHaptic()
@@ -299,25 +308,27 @@ fun HomeScreenMiuix(
                         )
                     }
                 }
-                item {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        DataSummaryCard(
-                            title = if (snapshotUnavailable) "上次已冻结" else "当前已冻结",
-                            count = frozenAppCount,
-                            unit = "应用",
-                            modifier = Modifier.weight(1f),
-                            onClick = { onNavigateToProcessList(1) }
-                        )
-                        DataSummaryCard(
-                            title = "已配置策略",
-                            count = configuredRuleCount,
-                            unit = "应用",
-                            modifier = Modifier.weight(1f),
-                            onClick = onOpenApps
-                        )
+                if (isActivated) {
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            DataSummaryCard(
+                                title = if (snapshotUnavailable) "上次已冻结" else "当前已冻结",
+                                count = frozenAppCount,
+                                unit = "应用",
+                                modifier = Modifier.weight(1f),
+                                onClick = { onNavigateToProcessList(1) }
+                            )
+                            DataSummaryCard(
+                                title = "已配置策略",
+                                count = configuredRuleCount,
+                                unit = "应用",
+                                modifier = Modifier.weight(1f),
+                                onClick = onOpenApps
+                            )
+                        }
                     }
                 }
 
@@ -696,10 +707,11 @@ private fun SystemInfoCard(
         val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "arm64-v8a"
         "$name ($abi)"
     }
+    // 未连接时没有任何可信的框架版本信息，写死具体数字会造成误导，直接说明状态
     val xposedStatus = if (runtimeStatus.binderAlive) {
         "libxposed API ${runtimeStatus.frameworkApiVersion}"
     } else {
-        "libxposed API 102 (Disconnected)"
+        "未连接"
     }
 
     Card(modifier = Modifier.fillMaxWidth()) {

@@ -10,6 +10,7 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.Shape
+import io.github.univers629.millet.ui.theme.LocalBlurMode
 import io.github.univers629.millet.ui.theme.LocalEnableProgressiveBlur
 import top.yukonga.miuix.kmp.blur.BlendColorEntry
 import top.yukonga.miuix.kmp.blur.BlurColors
@@ -36,7 +37,9 @@ fun Modifier.milletMiuixBlurEffect(
     blurRadius: Float = 25f,
     shape: Shape = RectangleShape,
 ): Modifier {
-    if (!enabled || backdrop == null) return this
+    // 统一模糊开关：档位为「关闭」时任何调用点都不再绘制毛玻璃。
+    val mode = LocalBlurMode.current
+    if (!mode.enabled || !enabled || backdrop == null) return this
     val blendColor = MiuixTheme.colorScheme.surface.copy(alpha = 0.8f)
     return this.then(
         Modifier.textureBlur(

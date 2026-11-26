@@ -46,6 +46,9 @@ object LsposedHelper {
     /**
      * 拉起 LSPosed 寄生管理器的模块列表页。
      *
+     * LSPosed 管理器只提供密钥码广播这一个入口（寄生管理器没有独立 APK 的启动 Activity），
+     * 管理器 manifest 里也没有按包名直达模块页的 deep link，因此只能停在管理器的模块列表。
+     *
      * @return true 表示已发出触发请求；框架未安装时系统不会给出可判定结果，因此不做存在性断言
      */
     fun openModuleList(context: Context): Boolean {

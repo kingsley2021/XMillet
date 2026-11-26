@@ -25,6 +25,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import io.github.univers629.millet.ui.util.CardClickLock
+import io.github.univers629.millet.ui.util.LocalCardClickLock
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Card
 import top.yukonga.miuix.kmp.basic.Icon
@@ -75,6 +77,8 @@ fun FoldablePreferenceSection(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     var expanded by rememberSaveable(title) { mutableStateOf(initiallyExpanded) }
+    // 展开/收起动画期间忽略其它卡片点击：避免连点在动画中途反向切换造成跳动。
+    val clickLock = LocalCardClickLock.current
     val arrowRotation by animateFloatAsState(
         targetValue = if (expanded) 90f else 0f,
         animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
@@ -104,7 +108,11 @@ fun FoldablePreferenceSection(
                     .graphicsLayer { rotationZ = arrowRotation },
             )
         },
-        onClick = { expanded = !expanded },
+        onClick = {
+            if (clickLock.tryAcquire(CardClickLock.ExpandWindowMillis)) {
+                expanded = !expanded
+            }
+        },
     )
     AnimatedVisibility(
         visible = expanded,

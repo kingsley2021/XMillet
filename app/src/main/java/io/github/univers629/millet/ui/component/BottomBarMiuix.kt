@@ -137,15 +137,28 @@ enum class BottomBarDestination(
 ) {
     Home("主页", MiuixIcons.Glass.HomeOutline, MiuixIcons.Glass.HomeFill),
     Processes("进程列表", MiuixIcons.Glass.NotesOutline, MiuixIcons.Glass.NotesFill),
-    TombStats("墓碑统计", MiuixIcons.Glass.DigitalStatistics, MiuixIcons.Glass.DigitalStatistics),
+    // DigitalStatistics 没有 Fill 变体，选中态改用同一图标的 Demibold 字重变体（其余 Tab 沿用 Outline/Fill）。
+    TombStats("墓碑统计", MiuixIcons.Glass.DigitalStatistics, MiuixIcons.Glass.Demibold.DigitalStatistics),
     Settings("设置", MiuixIcons.Glass.SettingsOutline, MiuixIcons.Glass.SettingsFill);
 
     fun icon(selected: Boolean): ImageVector = if (selected) iconFill else iconOutline
 
     companion object {
-        /** 当前可见的底栏目的地（顺序即 Pager 页序）。页面下标一律经由此列表换算，禁止硬编码。 */
-        fun visible(showTombStats: Boolean): List<BottomBarDestination> =
-            if (showTombStats) entries.toList() else entries.filter { it != TombStats }
+        /**
+         * 当前可见的底栏目的地（顺序即 Pager 页序）。页面下标一律经由此列表换算，禁止硬编码。
+         *
+         * @param showTombStats 用户是否在设置里开启了「墓碑统计」页。
+         * @param isActivated 系统服务是否已激活；未激活时只剩「主页」「设置」两个 Tab
+         *   （进程列表与墓碑统计都依赖服务侧的冻结/唤醒数据，未激活时没有内容可看）。
+         */
+        fun visible(
+            showTombStats: Boolean,
+            isActivated: Boolean = true,
+        ): List<BottomBarDestination> = when {
+            !isActivated -> listOf(Home, Settings)
+            showTombStats -> entries.toList()
+            else -> entries.filter { it != TombStats }
+        }
 
         /** 按目的地枚举解析在新可见列表中的目标页码；目标已被隐藏时回退至首页（0）。 */
         fun resolvePageIndex(
@@ -252,7 +265,8 @@ fun BoxScope.BottomBarMiuix(
                     items = glassItems,
                     selectedIndex = safeSelectedIndex,
                     onSelect = { mainState.animateToPage(it) },
-                    backdrop = if (isRuntimeShaderSupported()) backdrop else null,
+                    // 统一模糊开关：关闭背景模糊时不再采样背景，玻璃底栏回退为纯色底
+                    backdrop = if (enableBlur && isRuntimeShaderSupported()) backdrop else null,
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 24.dp),
@@ -276,8 +290,8 @@ fun BoxScope.BottomBarMiuix(
                 onSelected = { mainState.animateToPage(it) },
                 backdrop = backdrop,
                 tabsCount = items.size,
-                isBlurEnabled = enableFloatingBottomBarBlur || enableBlur,
-                liquidGlass = enableFloatingBottomBarBlur,
+                isBlurEnabled = enableBlur && isRuntimeShaderSupported(),
+                liquidGlass = enableFloatingBottomBarBlur && enableBlur,
             ) { activateTab ->
                 items.forEachIndexed { index, item ->
                     val destination = destinations[index]

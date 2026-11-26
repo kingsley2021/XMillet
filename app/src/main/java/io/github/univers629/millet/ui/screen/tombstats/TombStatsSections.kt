@@ -6,20 +6,26 @@ import top.yukonga.miuix.kmp.basic.InputField
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.animateContentSize
-import androidx.compose.animation.Crossfade
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.SpringSpec
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
@@ -29,6 +35,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.captionBar
 import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBars
@@ -37,7 +44,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -60,6 +66,7 @@ import androidx.compose.ui.geometry.RoundRect
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
@@ -92,11 +99,11 @@ import io.github.univers629.millet.ui.util.PopupBackdropHolder
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.delay
 import top.yukonga.miuix.kmp.basic.BasicComponent
 import top.yukonga.miuix.kmp.basic.Button
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
 import top.yukonga.miuix.kmp.basic.Card
-import top.yukonga.miuix.kmp.basic.HorizontalDivider
 import top.yukonga.miuix.kmp.basic.Icon
 import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.InfiniteProgressIndicator
@@ -109,15 +116,80 @@ import top.yukonga.miuix.kmp.icon.glass.Filter
 import top.yukonga.miuix.kmp.icon.glass.QuietMode
 import top.yukonga.miuix.kmp.icon.basic.Search
 import top.yukonga.miuix.kmp.icon.extended.Close
-import top.yukonga.miuix.kmp.icon.extended.ExpandLess
-import top.yukonga.miuix.kmp.icon.extended.ExpandMore
 import top.yukonga.miuix.kmp.icon.extended.Filter
+import top.yukonga.miuix.kmp.icon.glass.ChevronForward
 import top.yukonga.miuix.kmp.theme.LocalDismissState
 import top.yukonga.miuix.kmp.squircle.squircleBackground
-import top.yukonga.miuix.kmp.squircle.squircleBorder
 import top.yukonga.miuix.kmp.squircle.squircleClip
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 import top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme
+
+/**
+ * 排行搜索收放的统一曲线：搜索行高度、输入框宽度与下方排行卡片的内容高度都走同一个 spring，
+ * 收尾时不会出现两条曲线相撞的顿挫。
+ */
+private val RankSearchSizeSpec: SpringSpec<IntSize> = spring(
+    dampingRatio = Spring.DampingRatioNoBouncy,
+    stiffness = Spring.StiffnessMediumLow,
+    visibilityThreshold = IntSize.VisibilityThreshold,
+)
+
+/** 搜索收放进度（0 = 收起，1 = 展开）的动画曲线，与 [RankSearchSizeSpec] 同参。 */
+private val RankSearchProgressSpec: SpringSpec<Float> = spring(
+    dampingRatio = Spring.DampingRatioNoBouncy,
+    stiffness = Spring.StiffnessMediumLow,
+)
+
+/** 搜索行（Miuix InputField）的固有高度，行高按进度比例裁切。 */
+private val RankSearchFieldHeight = 45.dp
+
+/** 搜索行与上方 Tab 栏、下方排行卡片之间的统一间距。 */
+private val RankSearchRowSpacing = 10.dp
+
+/** 搜索行连同它与下方卡片的间距：一起随进度收起，收起结束不会留下空隙。 */
+private val RankSearchRowTotalHeight = RankSearchFieldHeight + RankSearchRowSpacing
+
+/** 低于这个进度就当作完全收起：剩余高度不足 0.1dp，直接移出组合。 */
+internal const val RankSearchRowEpsilon = 0.002f
+
+/**
+ * 搜索行的高度 / 宽度比例。progress 归零（含动画尾部的极小值）时严格返回 0，
+ * 保证收起完成后这一行既不占位也不绘制。
+ */
+internal fun rankSearchRowFraction(progress: Float): Float = when {
+    progress.isNaN() || progress <= RankSearchRowEpsilon -> 0f
+    progress >= 1f -> 1f
+    else -> progress
+}
+
+/**
+ * 搜索行的整行透明度：前 [RankSearchFadeInFraction] 段完成淡入。
+ *
+ * 只裁高度的话，收起尾部会留下一条被裁白的输入框顶边（InputField 的 capsule 背景），
+ * 看起来就是「闪一条白边」；按同一进度淡出后，行高只剩几 px 时已经完全透明。
+ */
+internal fun rankSearchRowAlpha(progress: Float): Float =
+    (rankSearchRowFraction(progress) / RankSearchFadeInFraction).coerceIn(0f, 1f)
+
+/** 搜索行淡入淡出所占的进度区间。 */
+internal const val RankSearchFadeInFraction = 0.35f
+
+/** 搜索行的占位高度（含它与下方卡片的间距）；收起完成后严格为 0，这一行不占位。 */
+internal fun rankSearchRowHeight(progress: Float): Dp =
+    RankSearchRowTotalHeight * rankSearchRowFraction(progress)
+
+/** 排行模式 Tab 栏的几何参数。 */
+private val RankTabHeight = 42.dp
+private val RankTabPadding = 3.dp
+private val RankTabGap = 3.dp
+private val RankTabCornerRadius = 12.dp
+private val RankTabIndicatorCornerRadius = 10.dp
+
+/** 排行榜 Tab 指示器的滑动曲线：轻微回弹的 spring，切换干脆但不生硬。 */
+private val RankTabIndicatorSpec = spring<Dp>(dampingRatio = 0.78f, stiffness = 420f)
+
+/** 排行榜 Tab 的按压反馈曲线。 */
+private val RankTabPressSpec = spring<Float>(dampingRatio = 0.55f, stiffness = 900f)
 
 @Composable
 private fun WakeCategory.displayColor(): Color {
@@ -192,22 +264,6 @@ internal fun LazyListScope.statsContent(
                     value = formatCount(backgroundWakeAppCount),
                     unit = "个",
                     modifier = Modifier.weight(1f),
-                )
-            }
-        }
-    }
-
-    if ("native_records" in visibleSections) item(key = "native_records") {
-        Card(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-            insideMargin = PaddingValues(16.dp),
-        ) {
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                Text("系统记录", fontSize = 14.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurface)
-                Text(
-                    "冻结 ${formatCount(snap.freezeCount)} 次 · 解冻 ${formatCount(snap.totalWakeCount)} 次",
-                    fontSize = 13.sp,
-                    color = colorScheme.onSurfaceVariantSummary,
                 )
             }
         }
@@ -368,9 +424,7 @@ private fun ScreenOffBanner(snap: FreezeStatsSnapshot) {
             Column(Modifier.weight(1f)) {
                 Text(
                     text = "息屏时系统解冻记录 ${formatCount(count)} 次",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = colorScheme.onSurface,
+                    style = rememberStatsHeadlineStyle(),
                 )
                 Text(
                     text = when {
@@ -405,8 +459,8 @@ private fun DozeAttributionCard(
             Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 Text(
                     text = "暂无深度待机归因数据",
-                    fontSize = 14.sp,
-                    fontWeight = FontWeight.Medium,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
                     color = colorScheme.onSurface,
                 )
                 Text(
@@ -550,14 +604,20 @@ private fun DozeAttributionCard(
             }
 
             if (summary.recentSessions.isNotEmpty()) {
-                HorizontalDivider()
+                // 与排行「查看全部 n 个应用」行同一套样式：不要底色、不要按压层，
+                // 只有居中的标题色文字 + 灰色 chevron，展开态靠 chevron 旋转表达。
+                val sessionArrowRotation by animateFloatAsState(
+                    targetValue = if (showSessions) 90f else 0f,
+                    animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
+                    label = "dozeSessionArrow",
+                )
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { showSessions = !showSessions }
-                        .padding(vertical = 2.dp),
+                        .clickable(role = Role.Button) { showSessions = !showSessions }
+                        .padding(vertical = 12.dp),
+                    horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
                 ) {
                     Text(
                         text = if (showSessions) "收起最近待机分段" else "最近待机分段 (${summary.recentSessions.size})",
@@ -565,14 +625,28 @@ private fun DozeAttributionCard(
                         fontWeight = FontWeight.Medium,
                         color = colorScheme.primary,
                     )
+                    Spacer(Modifier.width(6.dp))
                     Icon(
-                        imageVector = if (showSessions) MiuixIcons.ExpandLess else MiuixIcons.ExpandMore,
-                        contentDescription = null,
-                        tint = colorScheme.primary,
-                        modifier = Modifier.size(16.dp),
+                        imageVector = MiuixIcons.Glass.ChevronForward,
+                        contentDescription = if (showSessions) "收起最近待机分段" else "展开最近待机分段",
+                        tint = colorScheme.onSurfaceVariantSummary,
+                        modifier = Modifier
+                            .size(16.dp)
+                            .graphicsLayer { rotationZ = sessionArrowRotation },
                     )
                 }
-                AnimatedVisibility(visible = showSessions) {
+                // 高度伸缩同样走 spring（与折叠卡片一致），展开与收起都不再出现一帧跳变。
+                AnimatedVisibility(
+                    visible = showSessions,
+                    enter = expandVertically(
+                        animationSpec = spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMediumLow, IntSize.VisibilityThreshold),
+                        expandFrom = Alignment.Top,
+                    ),
+                    exit = shrinkVertically(
+                        animationSpec = spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMediumLow, IntSize.VisibilityThreshold),
+                        shrinkTowards = Alignment.Top,
+                    ),
+                ) {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         summary.recentSessions.take(6).forEach { s ->
                             val batText = when {
@@ -610,27 +684,33 @@ private fun DozeAttributionCard(
 private fun WakeReasonSection(wake: Map<WakeCategory, Int>) {
     val total = wake.values.sum()
     val safeTotal = total.coerceAtLeast(1)
-    val bgCount = wake.entries.sumOf { if (it.key.isBackground) it.value else 0 }
+    val bgCount = remember(wake) { wake.entries.sumOf { if (it.key.isBackground) it.value else 0 } }
     val userCount = wake[WakeCategory.USER_OPEN] ?: 0
-    val ordered = wake.entries.filter { it.value > 0 }.sortedByDescending { it.value }
+    // 排序只跟入参有关，缓存下来避免每次重组都重排。
+    val ordered = remember(wake) { wake.entries.filter { it.value > 0 }.sortedByDescending { it.value } }
+    // displayColor() 是 @Composable，不能塞进 remember 里，只能每次重组现算。
     val segments = ordered.map { it.key.displayColor() to it.value.toFloat() }
+    // 进度条整段只播一次生长动画：700ms 后新进入组合的行直接显示满值，
+    // 否则滚动中每行都重播 550ms 补间，叠加起来就是下滑掉帧。
+    var animateBars by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        delay(700)
+        animateBars = false
+    }
 
     Column(Modifier.fillMaxWidth()) {
         if (total > 0) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            // 两行排布：摘要与「解冻记录」不再各占一半争宽，16sp 也不会折行。
+            Column(Modifier.fillMaxWidth()) {
                 Text(
                     text = "解冻记录 ${formatCount(total)} 次",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = colorScheme.onSurfaceVariantSummary,
+                    style = rememberStatsHeadlineStyle(),
                 )
+                Spacer(Modifier.height(4.dp))
                 Text(
-                    text = "后台 ${formatCount(bgCount)} · 前台活动 ${formatCount(userCount)}",
-                    fontSize = 12.sp,
+                    text = "后台活动 ${formatCount(bgCount)} · 前台活动 ${formatCount(userCount)}",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
                     color = colorScheme.onSurfaceVariantSummary,
                 )
             }
@@ -638,6 +718,7 @@ private fun WakeReasonSection(wake: Map<WakeCategory, Int>) {
         }
         SegmentedBar(
             segments = segments,
+            animateOnEnter = animateBars,
             modifier = Modifier
                 .fillMaxWidth()
                 .height(14.dp),
@@ -662,6 +743,7 @@ private fun WakeReasonSection(wake: Map<WakeCategory, Int>) {
                 Text(
                     text = cat.label,
                     fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
                     color = colorScheme.onSurface,
                     modifier = Modifier.weight(1f),
                 )
@@ -694,8 +776,11 @@ private fun TimeDistributionSection(
     var selected by remember(window) { mutableIntStateOf(-1) }
     val onColor = colorScheme.primary
     val offColor = screenOffAccentColor()
-    val maxTotal = buckets.maxOfOrNull { it.total } ?: 0
-    val peakIndex = if (maxTotal > 0) buckets.indices.maxByOrNull { buckets[it].total } ?: -1 else -1
+    // 峰值与峰值下标只跟分桶数据有关，缓存起来避免每次重组都重算一遍。
+    val maxTotal = remember(buckets) { buckets.maxOfOrNull { it.total } ?: 0 }
+    val peakIndex = remember(buckets, maxTotal) {
+        if (maxTotal > 0) buckets.indices.maxByOrNull { buckets[it].total } ?: -1 else -1
+    }
     val showIndex = if (selected in buckets.indices) selected else peakIndex
 
     Column(Modifier.fillMaxWidth()) {
@@ -711,9 +796,7 @@ private fun TimeDistributionSection(
                     val suffix = if (buckets.size == 24) " 时" else ""
                     Text(
                         text = "$prefix${b.label}$suffix  共 ${formatCount(b.total)} 次",
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = colorScheme.onSurface,
+                        style = rememberStatsHeadlineStyle(),
                     )
                     Text(
                         text = "亮屏 ${formatCount(b.screenOnWakes)} · 息屏 ${formatCount(b.screenOffWakes)}",
@@ -819,8 +902,14 @@ private fun InterventionSection(snap: FreezeStatsSnapshot) {
             rules.forEach { (rule, n) ->
                 Column {
                     Row(Modifier.fillMaxWidth()) {
-                        Text(rule.label, fontSize = 14.sp, color = colorScheme.onSurface, modifier = Modifier.weight(1f))
-                        Text(formatCount(n), fontSize = 14.sp, fontWeight = FontWeight.Medium, color = colorScheme.onSurface)
+                        Text(
+                            rule.label,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = colorScheme.onSurface,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(formatCount(n), fontSize = 16.sp, fontWeight = FontWeight.Bold, color = colorScheme.onSurface)
                     }
                     Spacer(Modifier.height(4.dp))
                     ProgressLine(fraction = n.toFloat() / maxRule, color = colorScheme.primary)
@@ -881,11 +970,19 @@ private fun AppRankSection(
     val sorted = remember(baseSorted, hideSystemApps) {
         if (hideSystemApps) baseSorted.filter { !it.isSystem } else baseSorted
     }
-    // 收起搜索时立即恢复列表并清空查询词，整个收起过程只发生一次布局变化，
-    // 避免动画结束后的第二次重组造成收尾卡顿。
-    val activeQuery = if (searchVisible) searchQuery else ""
-    LaunchedEffect(searchVisible) {
-        if (!searchVisible && searchQuery.isNotEmpty()) {
+    // 搜索收放只用一个进度值：它同时驱动搜索行高度、输入框宽度与下方排行卡片位移。
+    // 搜索按钮固定在标题行里，不参与动画、也不再 Crossfade 互换图标，所以收尾不会出现图标复位或跳动。
+    val searchProgress by animateFloatAsState(
+        targetValue = if (searchVisible) 1f else 0f,
+        animationSpec = RankSearchProgressSpec,
+        label = "rankSearchProgress",
+    )
+    // 收起动画期间继续保留过滤结果，等进度真正归零后才清空查询词并恢复完整排行，
+    // 避免动画进行到一半时列表先跳变。
+    val searchSettledCollapsed = !searchVisible && searchProgress <= 0.001f
+    val activeQuery = if (searchSettledCollapsed) "" else searchQuery
+    LaunchedEffect(searchSettledCollapsed) {
+        if (searchSettledCollapsed && searchQuery.isNotEmpty()) {
             searchQuery = ""
         }
     }
@@ -902,8 +999,15 @@ private fun AppRankSection(
         sorted.maxOfOrNull { rankValue(it, mode) }?.coerceAtLeast(1f) ?: 1f
     }
     val shown = if (expanded || activeQuery.isNotBlank()) filtered else filtered.take(10)
+    // 排行进度条整段只播一次生长动画：700ms 后新进入组合的行直接显示满值，
+    // 避免滚动时每行都重播 550ms 补间。
+    var animateBars by remember { mutableStateOf(true) }
+    LaunchedEffect(Unit) {
+        delay(700)
+        animateBars = false
+    }
 
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Column {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -938,17 +1042,18 @@ private fun AppRankSection(
                     },
                     modifier = Modifier.size(36.dp),
                 ) {
-                    Crossfade(targetState = searchVisible, animationSpec = tween(200), label = "rankSearchIcon") { open ->
-                        Icon(
-                            imageVector = if (open) MiuixIcons.Close else MiuixIcons.Basic.Search,
-                            contentDescription = if (open) "收起搜索" else "搜索应用排行",
-                            tint = if (open) colorScheme.primary else colorScheme.onSurfaceVariantSummary,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
+                    // 图标固定在标题行末尾，只用配色表达开合状态，避免切换图标造成的位置跳动。
+                    Icon(
+                        imageVector = MiuixIcons.Basic.Search,
+                        contentDescription = if (searchVisible) "收起搜索" else "搜索应用排行",
+                        tint = if (searchVisible) colorScheme.primary else colorScheme.onSurfaceVariantSummary,
+                        modifier = Modifier.size(20.dp),
+                    )
                 }
             }
         }
+
+        Spacer(Modifier.height(RankSearchRowSpacing))
 
         RankModeTabRow(
             tabs = RankMode.entries.map { it.label },
@@ -957,32 +1062,21 @@ private fun AppRankSection(
             modifier = Modifier.padding(horizontal = 12.dp),
         )
 
-        AnimatedVisibility(
-            visible = searchVisible,
-            enter = expandVertically(spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMediumLow, IntSize.VisibilityThreshold), expandFrom = Alignment.Top),
-            exit = shrinkVertically(spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMedium, IntSize.VisibilityThreshold), shrinkTowards = Alignment.Top),
-            modifier = Modifier.clipToBounds(),
-        ) {
-            // expanded 固定为 true：输入框只在展开时组合，收起过程交给上层的裁切动画，
-            // 避免输入框内部的文字淡出/清除与收起动画叠加造成闪现。
-            InputField(
-                query = searchQuery,
-                onQueryChange = { searchQuery = it },
-                onSearch = { },
-                expanded = true,
-                onExpandedChange = { },
-                label = "搜索应用名、包名或 UID",
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 12.dp),
-            )
-        }
+        Spacer(Modifier.height(RankSearchRowSpacing))
+
+        // 搜索行高度与输入框宽度共用同一个 progress，收起结束时行高为 0 才移出组合，因此不会跳变。
+        RankSearchField(
+            progress = searchProgress,
+            query = searchQuery,
+            onQueryChange = { searchQuery = it },
+            modifier = Modifier.padding(horizontal = 12.dp),
+        )
 
         Card(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 12.dp)
-                .animateContentSize(spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMediumLow, IntSize.VisibilityThreshold)),
+                .animateContentSize(RankSearchSizeSpec),
         ) {
             if (shown.isEmpty()) {
                 if (activeQuery.isNotBlank()) {
@@ -1001,11 +1095,16 @@ private fun AppRankSection(
                     app = app,
                     mode = mode,
                     fraction = rankValue(app, mode) / maxValue,
+                    animateOnEnter = animateBars,
                     onClick = { onOpenDetail(app) },
                 )
             }
             if (filtered.size > 10 && activeQuery.isBlank()) {
-                HorizontalDivider(modifier = Modifier.padding(horizontal = 14.dp))
+                val moreArrowRotation by animateFloatAsState(
+                    targetValue = if (expanded) 90f else 0f,
+                    animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
+                    label = "rankMoreArrow",
+                )
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -1020,12 +1119,14 @@ private fun AppRankSection(
                         fontWeight = FontWeight.Medium,
                         color = colorScheme.primary,
                     )
-                    Spacer(Modifier.width(4.dp))
+                    Spacer(Modifier.width(6.dp))
                     Icon(
-                        imageVector = if (expanded) MiuixIcons.ExpandLess else MiuixIcons.ExpandMore,
-                        contentDescription = null,
-                        tint = colorScheme.primary,
-                        modifier = Modifier.size(16.dp),
+                        imageVector = MiuixIcons.Glass.ChevronForward,
+                        contentDescription = if (expanded) "收起" else "查看全部",
+                        tint = colorScheme.onSurfaceVariantSummary,
+                        modifier = Modifier
+                            .size(16.dp)
+                            .graphicsLayer { rotationZ = moreArrowRotation },
                     )
                 }
             }
@@ -1034,8 +1135,56 @@ private fun AppRankSection(
 }
 
 /**
- * 排行模式的等分标签栏：沿用 Miuix TabRow 的视觉（surface 轨道 + surfaceContainer 选中块 + 1dp 描边），
- * 但四项等宽、标签不滚动，避免搜索按钮挤压时「系统记录」被截断。
+ * 排行搜索行：行高 = [RankSearchRowTotalHeight] × [rankSearchRowFraction]，
+ * 输入框宽度 = 可用宽度 × 同一比例，整行透明度按 [rankSearchRowAlpha] 收尾。
+ *
+ * 收起尾部只裁高度会残留一条被裁白的输入框顶边，所以最后一段同时把整行淡出；
+ * 高度里已经包含它与下方卡片的间距，比例归零后直接移出组合，这一行完全不留位。
+ */
+@Composable
+private fun RankSearchField(
+    progress: Float,
+    query: String,
+    onQueryChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val fraction = rankSearchRowFraction(progress)
+    if (fraction <= 0f) return
+    val rowAlpha = rankSearchRowAlpha(progress)
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(rankSearchRowHeight(progress))
+            .graphicsLayer { alpha = rowAlpha }
+            .clipToBounds(),
+        contentAlignment = Alignment.TopStart,
+    ) {
+        // 输入框保持固有高度与展开态，由外层同时按比例裁切高度、收缩宽度。
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(fraction.coerceAtLeast(0.02f))
+                .height(RankSearchFieldHeight),
+        ) {
+            InputField(
+                query = query,
+                onQueryChange = onQueryChange,
+                onSearch = { },
+                expanded = true,
+                onExpandedChange = { },
+                label = "搜索应用名、包名或 UID",
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+    }
+}
+
+/**
+ * 排行模式的等分 Tab 栏：Miuix 轨道 + 单个滑动指示器。
+ *
+ * - 指示器用 spring 平滑滑到目标项，不再硬切；
+ * - 四项等宽由 [BoxWithConstraints] 现场计算，窄屏下四个汉字也不会被截断；
+ * - 每个 Tab 持有自己的 interactionSource，按下时轻微缩放作为按压反馈；
+ * - 不使用 Material TabRow 的下划线指示器。
  */
 @Composable
 private fun RankModeTabRow(
@@ -1044,45 +1193,71 @@ private fun RankModeTabRow(
     onSelect: (Int) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Row(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
-            .height(42.dp)
-            .squircleBackground(color = colorScheme.surface, cornerRadius = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(3.dp),
+            .height(RankTabHeight)
+            .squircleBackground(color = colorScheme.surface, cornerRadius = RankTabCornerRadius),
     ) {
-        tabs.forEachIndexed { index, label ->
-            val selected = index == selectedIndex
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxHeight()
-                    .padding(vertical = 3.dp)
-                    .then(
-                        if (selected) {
-                            Modifier.squircleBackground(color = colorScheme.surfaceContainer, cornerRadius = 10.dp)
-                        } else {
-                            Modifier.squircleBorder(width = 1.dp, color = colorScheme.outline, cornerRadius = 10.dp)
-                        },
-                    )
-                    .squircleClip(cornerRadius = 10.dp)
-                    .selectable(
-                        selected = selected,
-                        role = Role.Tab,
-                        onClick = { onSelect(index) },
-                    ),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = label,
-                    fontSize = 13.sp,
-                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                    color = if (selected) colorScheme.onBackground else colorScheme.onSurfaceVariantSummary,
-                    textAlign = TextAlign.Center,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.padding(horizontal = 4.dp),
+        val safeIndex = selectedIndex.coerceIn(0, (tabs.size - 1).coerceAtLeast(0))
+        val tabWidth = if (tabs.isEmpty()) {
+            0.dp
+        } else {
+            ((maxWidth - RankTabPadding * 2 - RankTabGap * (tabs.size - 1)) / tabs.size).coerceAtLeast(0.dp)
+        }
+        val indicatorOffset by animateDpAsState(
+            targetValue = RankTabPadding + (tabWidth + RankTabGap) * safeIndex,
+            animationSpec = RankTabIndicatorSpec,
+            label = "rankTabIndicator",
+        )
+        Box(
+            modifier = Modifier
+                .offset(x = indicatorOffset, y = RankTabPadding)
+                .size(width = tabWidth, height = RankTabHeight - RankTabPadding * 2)
+                .squircleBackground(color = colorScheme.surfaceContainer, cornerRadius = RankTabIndicatorCornerRadius),
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(RankTabPadding),
+            horizontalArrangement = Arrangement.spacedBy(RankTabGap),
+        ) {
+            tabs.forEachIndexed { index, label ->
+                val selected = index == safeIndex
+                val interactionSource = remember { MutableInteractionSource() }
+                val pressed by interactionSource.collectIsPressedAsState()
+                val pressScale by animateFloatAsState(
+                    targetValue = if (pressed) 0.93f else 1f,
+                    animationSpec = RankTabPressSpec,
+                    label = "rankTabPress$index",
                 )
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .graphicsLayer {
+                            scaleX = pressScale
+                            scaleY = pressScale
+                        }
+                        .squircleClip(cornerRadius = RankTabIndicatorCornerRadius)
+                        .clickable(
+                            interactionSource = interactionSource,
+                            indication = null,
+                            role = Role.Tab,
+                        ) { onSelect(index) },
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        text = label,
+                        fontSize = StatsHeadlineFontSize,
+                        fontWeight = StatsHeadlineFontWeight,
+                        color = if (selected) colorScheme.onBackground else colorScheme.onSurfaceVariantSummary,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(horizontal = 2.dp),
+                    )
+                }
             }
         }
     }
@@ -1101,6 +1276,7 @@ private fun RankRow(
     app: AppFreezeStats,
     mode: RankMode,
     fraction: Float,
+    animateOnEnter: Boolean,
     onClick: () -> Unit,
 ) {
     val barFraction = fraction.coerceIn(0.03f, 1f)
@@ -1176,13 +1352,17 @@ private fun RankRow(
             }
             Spacer(Modifier.height(5.dp))
             if (mode == RankMode.WAKE) {
-                val segs = app.wakeByCategory.entries
-                    .filter { it.key.isBackground && it.value > 0 }
-                    .sortedByDescending { it.value }
-                    .map { it.key.displayColor() to it.value.toFloat() }
+                // 过滤与排序只跟 app 有关，缓存下来；配色依赖主题色（@Composable），只能每次现算。
+                val wakeEntries = remember(app) {
+                    app.wakeByCategory.entries
+                        .filter { it.key.isBackground && it.value > 0 }
+                        .sortedByDescending { it.value }
+                }
+                val segs = wakeEntries.map { it.key.displayColor() to it.value.toFloat() }
                 SegmentedBar(
                     segments = segs,
                     fillFraction = barFraction,
+                    animateOnEnter = animateOnEnter,
                     modifier = Modifier
                         .fillMaxWidth()
                         .height(6.dp),
@@ -1802,10 +1982,22 @@ private fun SegmentedBar(
     segments: List<Pair<Color, Float>>,
     modifier: Modifier = Modifier,
     fillFraction: Float = 1f,
+    animateOnEnter: Boolean = true,
 ) {
     val track = colorScheme.surfaceContainerHighest
-    val progress = remember { Animatable(0f) }
-    LaunchedEffect(Unit) { progress.animateTo(1f, tween(550)) }
+    // 生长动画只给「首次进入组合」用：调用方在整段动画结束后把 animateOnEnter 置 false，
+    // 之后滚动中新进入组合的行直接以满值绘制，不再各自重播 550ms 补间。
+    val progress = remember { Animatable(if (animateOnEnter) 0f else 1f) }
+    LaunchedEffect(animateOnEnter) {
+        if (progress.value < 1f) {
+            if (animateOnEnter) {
+                progress.animateTo(1f, tween(550))
+            } else {
+                // 动画途中被要求停止时快速收尾，避免整条进度条硬跳。
+                progress.animateTo(1f, tween(80))
+            }
+        }
+    }
     val clampedFill = fillFraction.coerceIn(0f, 1f)
 
     Canvas(modifier = modifier.clip(RoundedCornerShape(50))) {

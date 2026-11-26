@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.add
 import androidx.compose.foundation.layout.displayCutout
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBars
@@ -25,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -145,8 +147,16 @@ fun TombStatsContent(
     val pullToRefreshState = rememberPullToRefreshState()
     val listState = rememberLazyListState()
     val fallbackTabBackdrop = rememberLayerBackdrop()
-    val contentUnderTopBar by remember(listState) {
-        derivedStateOf { listState.canScrollBackward }
+    // 顶栏的模糊/浮起信号：除了「列表已滚过顶部」，还要算上输入法展开。
+    // 排行搜索框被键盘顶起吸附时列表往往已经回到顶部，canScrollBackward 变 false 会让模糊带整条消失。
+    // 统一走一个 derivedStateOf，顶栏只读一次派生值，滚动时不会因多次读滚动状态整体重组。
+    val density = LocalDensity.current
+    // WindowInsets.ime 是 @Composable 取值，只能在组合里读出来；它的 getBottom 仍会跟踪 insets 快照。
+    val imeInsets = WindowInsets.ime
+    val contentScrolled by remember(imeInsets) {
+        derivedStateOf {
+            listState.canScrollBackward || imeInsets.getBottom(density) > 0
+        }
     }
 
     var showTopPopup by remember { mutableStateOf(false) }
@@ -226,13 +236,14 @@ fun TombStatsContent(
                         )
                     },
                     scrollBehavior = scrollBehavior,
+                    contentScrolledSignal = { contentScrolled },
                     bottomContent = {
                         GlassSegmentedTabRow(
                             tabs = StatsWindow.entries.map { it.label },
                             selectedIndex = uiState.windowIndex,
                             onSelect = onSelectWindow,
                             backdrop = backdrop ?: fallbackTabBackdrop,
-                            surfaceAlpha = if (blurActive && contentUnderTopBar) 1f else 0f,
+                            surfaceAlpha = if (blurActive && contentScrolled) 1f else 0f,
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(horizontal = 12.dp)

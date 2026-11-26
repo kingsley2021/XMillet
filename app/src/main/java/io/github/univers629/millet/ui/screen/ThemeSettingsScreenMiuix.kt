@@ -42,6 +42,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.dynamicDarkColorScheme
@@ -70,6 +71,7 @@ import androidx.compose.ui.unit.dp
 import io.github.univers629.millet.core.PredictiveBackController
 import io.github.univers629.millet.ui.component.FoldablePreferenceSection
 import io.github.univers629.millet.ui.model.TombSection
+import io.github.univers629.millet.ui.theme.BlurMode
 import io.github.univers629.millet.ui.theme.LocalEnableBlur
 import io.github.univers629.millet.ui.theme.UiThemeState
 import io.github.univers629.millet.ui.theme.keyColorOptions
@@ -89,7 +91,7 @@ import top.yukonga.miuix.kmp.icon.glass.ChevronBackward
 import top.yukonga.miuix.kmp.icon.glass.BottomSplitScreenOutline
 import top.yukonga.miuix.kmp.icon.glass.Album
 import top.yukonga.miuix.kmp.icon.glass.DigitalStatistics
-import top.yukonga.miuix.kmp.icon.glass.GesturePassword
+import top.yukonga.miuix.kmp.icon.glass.Reset
 import top.yukonga.miuix.kmp.icon.glass.Theme
 import top.yukonga.miuix.kmp.icon.glass.Wallpaper
 import top.yukonga.miuix.kmp.icon.basic.Check
@@ -107,9 +109,12 @@ import top.yukonga.miuix.kmp.utils.scrollEndHaptic
 fun ThemeSettingsScreenMiuix(
     themeState: UiThemeState,
     onBack: () -> Unit,
+    /** 系统服务是否已激活；未激活时隐藏「墓碑统计」开关及其显示板块（底栏也没有该页）。 */
+    isActivated: Boolean = true,
 ) {
     val context = LocalContext.current
     val scrollBehavior = MiuixScrollBehavior()
+    val pageListState = rememberLazyListState()
     val enableBlur = LocalEnableBlur.current
     val backdrop = rememberBlurBackdrop(enableBlur)
     val blurActive = backdrop != null
@@ -154,6 +159,7 @@ fun ThemeSettingsScreenMiuix(
                     color = barColor,
                     title = "外观个性化",
                     scrollBehavior = scrollBehavior,
+                    contentScrolledSignal = { pageListState.canScrollBackward },
                     navigationIcon = {
                         BarIconButton(onClick = onBack) {
                             val layoutDirection = LocalLayoutDirection.current
@@ -176,6 +182,7 @@ fun ThemeSettingsScreenMiuix(
     ) { innerPadding ->
         Box(modifier = if (backdrop != null) Modifier.layerBackdrop(backdrop) else Modifier) {
             LazyColumn(
+                state = pageListState,
                 modifier = Modifier
                     .fillMaxHeight()
                     .scrollEndHaptic()
@@ -226,49 +233,46 @@ fun ThemeSettingsScreenMiuix(
                                 )
                             },
                             title = "背景模糊",
-                            summary = "高斯模糊为整块毛玻璃；渐进式模糊为顶栏边缘渐隐；关闭后顶栏为纯白",
+                            summary = "统一控制顶栏、底栏、弹窗与卡片玻璃：关闭后全部回退为纯色，高斯为整块毛玻璃，渐进为顶栏边缘渐隐",
                             items = listOf("关闭", "高斯模糊", "渐进式模糊"),
-                            selectedIndex = when {
-                                !themeState.enableBlur -> 0
-                                themeState.enableProgressiveBlur -> 2
-                                else -> 1
-                            },
+                            selectedIndex = themeState.blurMode.preferenceIndex,
                             onSelectedIndexChange = { idx ->
-                                themeState.updateEnableBlur(idx != 0)
-                                if (idx != 0) themeState.updateEnableProgressiveBlur(idx == 2)
+                                themeState.updateBlurMode(BlurMode.fromPreferenceIndex(idx))
                             },
                             backdrop = backdrop,
                         )
 
-                        SwitchPreference(
-                            startAction = {
-                                Icon(
-                                    imageVector = MiuixIcons.Glass.DigitalStatistics,
-                                    contentDescription = null,
-                                    modifier = Modifier
-                                        .padding(end = 8.dp)
-                                        .size(24.dp),
-                                    tint = colorScheme.onBackground
-                                )
-                            },
-                            title = "墓碑统计",
-                            summary = "在底栏显示墓碑统计页：冻结、唤醒与拦截次数",
-                            checked = themeState.showTombStatsTab,
-                            onCheckedChange = { themeState.updateShowTombStatsTab(it) }
-                        )
-
-                        if (themeState.showTombStatsTab) {
-                            FoldablePreferenceSection(
-                                title = "墓碑统计显示板块",
-                                summary = "已显示 ${themeState.tombSections.size}/${TombSection.entries.size} 个板块",
-                                icon = MiuixIcons.Glass.ListView,
-                            ) {
-                                TombSection.entries.forEach { section ->
-                                    SwitchPreference(
-                                        title = section.label,
-                                        checked = section.id in themeState.tombSections,
-                                        onCheckedChange = { themeState.updateTombSection(section.id, it) },
+                        if (isActivated) {
+                            SwitchPreference(
+                                startAction = {
+                                    Icon(
+                                        imageVector = MiuixIcons.Glass.DigitalStatistics,
+                                        contentDescription = null,
+                                        modifier = Modifier
+                                            .padding(end = 8.dp)
+                                            .size(24.dp),
+                                        tint = colorScheme.onBackground
                                     )
+                                },
+                                title = "墓碑统计",
+                                summary = "在底栏显示墓碑统计页：冻结、唤醒与拦截次数",
+                                checked = themeState.showTombStatsTab,
+                                onCheckedChange = { themeState.updateShowTombStatsTab(it) }
+                            )
+
+                            if (themeState.showTombStatsTab) {
+                                FoldablePreferenceSection(
+                                    title = "墓碑统计显示板块",
+                                    summary = "已显示 ${themeState.tombSections.size}/${TombSection.entries.size} 个板块",
+                                    icon = MiuixIcons.Glass.ListView,
+                                ) {
+                                    TombSection.entries.forEach { section ->
+                                        SwitchPreference(
+                                            title = section.label,
+                                            checked = section.id in themeState.tombSections,
+                                            onCheckedChange = { themeState.updateTombSection(section.id, it) },
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -338,7 +342,7 @@ fun ThemeSettingsScreenMiuix(
                         SwitchPreference(
                             startAction = {
                                 Icon(
-                                    imageVector = MiuixIcons.Glass.GesturePassword,
+                                    imageVector = MiuixIcons.Glass.Reset,
                                     contentDescription = null,
                                     modifier = Modifier
                                         .padding(end = 8.dp)

@@ -3,7 +3,6 @@ package io.github.univers629.millet.ui.model
 /** 墓碑统计页里可以单独开关的板块。 */
 enum class TombSection(val id: String, val label: String) {
     RANK("rank", "应用排行"),
-    NATIVE_RECORDS("native_records", "系统记录"),
     WAKE_REASONS("wake_reasons", "解冻原因"),
     TIME_DISTRIBUTION("time_distribution", "解冻时间分布"),
     DOZE("doze", "深睡归因"),
