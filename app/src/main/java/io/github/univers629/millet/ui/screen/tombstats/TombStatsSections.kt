@@ -273,6 +273,29 @@ internal fun LazyListScope.statsContent(
         ScreenOffBanner(snap)
     }
 
+    if ("native_records" in visibleSections) item(key = "native_records") {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp),
+            insideMargin = PaddingValues(16.dp),
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(
+                    text = "系统记录",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = colorScheme.onSurface,
+                )
+                Text(
+                    text = "冻结 ${formatCount(snap.freezeCount)} 次 · 解冻 ${formatCount(snap.totalWakeCount)} 次",
+                    fontSize = 13.sp,
+                    color = colorScheme.onSurfaceVariantSummary,
+                )
+            }
+        }
+    }
+
     if ("wake_reasons" in visibleSections) item(key = "wake_reasons") {
         SmallTitle(text = "系统解冻记录 · 原因")
         Card(

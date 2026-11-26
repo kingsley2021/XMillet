@@ -92,6 +92,7 @@ class UiThemeState(private val prefs: SharedPreferences) {
         private const val KEY_PROGRESSIVE_BLUR = "ui_progressive_blur" // 顶栏/底栏渐进式模糊
         private const val KEY_TOMB_SECTIONS = "ui_tomb_sections"       // 墓碑统计页显示的板块
         private const val KEY_TOMB_SECTIONS_V2 = "ui_tomb_sections_v2" // 板块偏好迁移标记（新增「深睡归因」后置位）
+        private const val KEY_TOMB_SECTIONS_V3 = "ui_tomb_sections_v3" // 板块偏好迁移标记（补回「系统记录」后置位）
     }
 
     /**
@@ -133,6 +134,15 @@ class UiThemeState(private val prefs: SharedPreferences) {
             prefs.edit()
                 .putStringSet(KEY_TOMB_SECTIONS, next)
                 .putBoolean(KEY_TOMB_SECTIONS_V2, true)
+                .apply()
+        }
+        // 旧版本移除了该板块，已保存的集合可能缺少该 id：迁移时补回一次，之后以用户开关为准
+        if (!prefs.getBoolean(KEY_TOMB_SECTIONS_V3, false)) {
+            val next = tombSections + TombSection.NATIVE_RECORDS.id
+            tombSections = next
+            prefs.edit()
+                .putStringSet(KEY_TOMB_SECTIONS, next)
+                .putBoolean(KEY_TOMB_SECTIONS_V3, true)
                 .apply()
         }
     }

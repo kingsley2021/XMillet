@@ -1,6 +1,6 @@
 package io.github.univers629.millet.ui.screen
 import io.github.univers629.millet.ui.util.MilletSmallTopAppBar
-import io.github.univers629.millet.ui.util.BlurredBar
+import io.github.univers629.millet.ui.util.LocalBarBackdrop
 import io.github.univers629.millet.ui.util.BarIconButton
 
 import android.content.Intent
@@ -42,6 +42,7 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -390,13 +391,18 @@ fun OobeScreenMiuix(
                 ) {
                     Scaffold(
                         topBar = {
-                            BlurredBar(permBackdrop, blurActive = permBackdrop != null) {
+                            // 配置向导的页面不画顶栏背景：这里只把采样源喂给玻璃按钮，
+                            // 不套 BlurredBar —— 「高斯模糊」档位会在页面顶部铺出一条毛玻璃带，
+                            // 等同于多出一条顶栏；渐进式档位顶栏未滚动时透明，该带不显现。
+                            CompositionLocalProvider(LocalBarBackdrop provides permBackdrop) {
                                 MilletSmallTopAppBar(
                                     title = "",
                                     color = Color.Transparent,
                                     titleColor = colorScheme.onSurface,
                                     scrollBehavior = permScrollBehavior,
                                     contentScrolledSignal = permContentScrolled,
+                                    // 权限页不画顶栏背景，包括关闭模糊时的纯白色带。
+                                    bandless = true,
                                     navigationIcon = {
                                         BarIconButton(
                                             icon = MiuixIcons.Glass.Back,
@@ -522,19 +528,12 @@ fun OobeScreenMiuix(
                                                         GrantedCheckIndicator()
                                                     } else {
                                                         StatusTagMiuix(
-                                                            label = "点击设置",
+                                                            label = "未激活",
                                                             backgroundColor = colorScheme.secondaryContainer,
                                                             contentColor = colorScheme.onSecondaryContainer
                                                         )
                                                     }
                                                 },
-                                                onClick = {
-                                                    if (isLspActive) {
-                                                        Toast.makeText(context, "LSPosed 模块已激活并握手成功", Toast.LENGTH_SHORT).show()
-                                                    } else {
-                                                        openLspManager()
-                                                    }
-                                                }
                                             )
 
                                             // 权限 2：允许读取所有应用列表

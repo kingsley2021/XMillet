@@ -25,14 +25,21 @@ class TombSectionsTest {
 
         val migrated = UiThemeState(prefs)
         assertEquals(
-            setOf(TombSection.RANK.id, TombSection.RECENT.id, TombSection.DOZE.id),
+            setOf(
+                TombSection.RANK.id,
+                TombSection.RECENT.id,
+                TombSection.DOZE.id,
+                TombSection.NATIVE_RECORDS.id,
+            ),
             migrated.tombSections,
         )
 
         // 用户主动关闭后，迁移标记已置位，重启不应再次打开
         migrated.updateTombSection(TombSection.DOZE.id, false)
+        migrated.updateTombSection(TombSection.NATIVE_RECORDS.id, false)
         val relaunched = UiThemeState(prefs)
         assertFalse(TombSection.DOZE.id in relaunched.tombSections)
+        assertFalse(TombSection.NATIVE_RECORDS.id in relaunched.tombSections)
         assertTrue(TombSection.RANK.id in relaunched.tombSections)
     }
 }

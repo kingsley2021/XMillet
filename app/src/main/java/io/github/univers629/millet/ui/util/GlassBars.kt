@@ -69,6 +69,16 @@ fun MilletTopAppBar(
     defaultWindowInsetsPadding: Boolean = true,
     bottomContent: @Composable () -> Unit = {},
     /**
+     * 静止时不铺背景带，只保留滚动后的内容遮挡效果。
+     *
+     * 用于不画顶栏背景的页面（例如配置向导的权限页），该页顶栏只承载返回按钮。
+     * 默认实现在关闭模糊时铺一条纯白带、在高斯模糊档位由外层 [BlurredBar] 铺整块毛玻璃，
+     * 使这类页面静止时多出一条顶栏；传 true 后：
+     * - 渐进式模糊：色带只用自上而下的渐隐画刷，未滚动时不可见，内容滚上来后渐显；
+     * - 高斯模糊 / 关闭模糊：色带完全透明，任何时候都不出现。
+     */
+    bandless: Boolean = false,
+    /**
      * 内容是否已滑到顶栏下方的信号（必须传 `listState.canScrollBackward` 一类的页面级状态）。
      *
      * miuix 的官方建议就是用列表的 `canScrollBackward` 表示顶栏按钮的浮起态；只看
@@ -84,6 +94,11 @@ fun MilletTopAppBar(
     val progressive = LocalEnableProgressiveBlur.current && backdrop != null
     val blurEnabled = LocalEnableBlur.current
     val band: Brush = when {
+        // 该页不画顶栏背景：静止时任何模糊档位都不铺色带。
+        // 渐进式模糊下仍需自上而下的渐隐画刷——内容滚到顶栏下面时显现，
+        // 否则该页没有内容遮挡顶栏时的模糊。
+        bandless && !progressive -> SolidColor(Color.Transparent)
+        bandless -> GlassTopAppBarDefaults.bandBrush(MiuixTheme.colorScheme.surface)
         // 背景模糊关闭时顶栏保持纯白，不画渐变也不做任何模糊。
         !blurEnabled -> SolidColor(MiuixTheme.colorScheme.surface)
         progressive -> GlassTopAppBarDefaults.bandBrush(MiuixTheme.colorScheme.surface)
@@ -102,7 +117,10 @@ fun MilletTopAppBar(
     val contentScrolled = listScrolled ||
         activation.activeCount > 0 ||
         (scrollState != null && (scrollState.contentOffset < 0f || scrollState.overscrollOffset < 0f))
-    val floating = progressive && contentScrolled
+    // 菜单展开时必须给出圆形锚点：顶栏按钮的材质由 GlassIconButton 从顶栏上下文取
+    // floating；非渐进式（高斯模糊档位 / 无采样源）的顶栏若不例外放行，弹出菜单只剩
+    // 一片透明，即 popup 按钮没有材质。
+    val floating = (progressive && contentScrolled) || activation.activeCount > 0
     CompositionLocalProvider(
         LocalBarGlassActivationState provides activation,
         LocalBarGlassFloating provides floating,
@@ -169,6 +187,7 @@ fun MilletSmallTopAppBar(
     scrollBehavior: ScrollBehavior? = null,
     defaultWindowInsetsPadding: Boolean = true,
     contentScrolledSignal: () -> Boolean,
+    bandless: Boolean = false,
 ) = MilletTopAppBar(
     title = title,
     modifier = modifier,
@@ -181,6 +200,7 @@ fun MilletSmallTopAppBar(
     scrollBehavior = scrollBehavior,
     defaultWindowInsetsPadding = defaultWindowInsetsPadding,
     contentScrolledSignal = contentScrolledSignal,
+    bandless = bandless,
 )
 
 /** 顶栏按钮与紧随其后的菜单之间共享的 Miuix 锚点（首次组合时按调用顺序配对）。 */
