@@ -11,6 +11,7 @@ import io.github.univers629.millet.core.Logger
 import io.github.univers629.millet.core.PrefReader
 import io.github.univers629.millet.core.PrefsSnapshot
 import io.github.univers629.millet.core.RomCapabilities
+import io.github.univers629.millet.system.BatteryPolicyApplier
 import java.lang.ref.WeakReference
 
 /**
@@ -529,7 +530,7 @@ object PowerKeeperState {
         )
     }
 
-    /** 按短时租约过滤 `CommonAdapter#add/removePowerSaveWhitelistApps` 的包名数组。 */
+    /** 按短时租约 + 配置库真值过滤 `CommonAdapter#add/removePowerSaveWhitelistApps` 的包名数组。 */
     internal fun filterPowerSaveWhitelistMutation(
         packages: Array<String>,
         isAdd: Boolean,
@@ -537,6 +538,7 @@ object PowerKeeperState {
     ): Pair<List<String>, List<String>> {
         val allowed = ArrayList<String>()
         val blocked = ArrayList<String>()
+        val unmatched = ArrayList<String>()
         for (pkg in packages) {
             val lease = userPowerSaveLeases[pkg]
             if (lease != null && lease.expireAtMs >= nowMs && lease.expectAdd == isAdd) {
@@ -545,6 +547,19 @@ object PowerKeeperState {
                 if (lease != null && lease.expireAtMs < nowMs) {
                     userPowerSaveLeases.remove(pkg, lease)
                 }
+                unmatched.add(pkg)
+            }
+        }
+        if (unmatched.isEmpty()) return allowed to blocked
+        // 租约只覆盖「设置后约 1 秒」的那一次同步；PowerKeeper 后续重建名单（开机、云策略更新）
+        // 早已超出租约。此时以配置库的 bgControl 为准：库里是「无限制」就放行添加、不是就放行移除，
+        // 避免用户手动选「无限制」后被自动同步改回「智能推荐」。
+        val bgControls = BatteryPolicyApplier.readBgControls(unmatched)
+        for (pkg in unmatched) {
+            val unrestricted = bgControls[pkg]?.let { it == BatteryPolicyApplier.BG_NO_RESTRICT }
+            if (HookDecisions.allowPowerSaveMutation(isAdd = isAdd, unrestrictedInDatabase = unrestricted)) {
+                allowed.add(pkg)
+            } else {
                 blocked.add(pkg)
             }
         }

@@ -36,8 +36,48 @@ object BatteryPolicyApplier {
     private const val COL_BG_CONTROL = "bgControl"
     private const val COL_PKG_NAME = "pkgName"
     private const val COL_USER_ID = "userId"
-    private const val BG_NO_RESTRICT = "noRestrict"
+    internal const val BG_NO_RESTRICT = "noRestrict"
     private const val BG_DEFAULT = "miuiAuto"
+
+    /**
+     * 读取 PowerKeeper `userTable.bgControl` 的当前值（包名 → bgControl）。
+     *
+     * 系统设置「省电策略」显示的就是这一列，用来判断用户是否显式选了「无限制」：
+     * P7/P8 拦截 PowerKeeper 自动增删白名单时，如果这一列显示用户想要的方向，
+     * 就应当放行，否则会出现「设置成无限制 → 白名单没同步 → 下次进页面又被改回智能推荐」。
+     */
+    internal fun readBgControls(packages: Collection<String>): Map<String, String> {
+        if (packages.isEmpty()) return emptyMap()
+        val context = SystemState.systemContext ?: return emptyMap()
+        val token = Binder.clearCallingIdentity()
+        return try {
+            val placeholders = packages.joinToString(",") { "?" }
+            val result = HashMap<String, String>(packages.size)
+            context.contentResolver.query(
+                Uri.parse(PK_USER_TABLE_URI),
+                arrayOf(COL_PKG_NAME, COL_BG_CONTROL),
+                "$COL_PKG_NAME IN ($placeholders)",
+                packages.toTypedArray(),
+                null
+            )?.use { cursor ->
+                val pkgIndex = cursor.getColumnIndex(COL_PKG_NAME)
+                val bgIndex = cursor.getColumnIndex(COL_BG_CONTROL)
+                if (pkgIndex >= 0 && bgIndex >= 0) {
+                    while (cursor.moveToNext()) {
+                        val pkg = cursor.getString(pkgIndex)
+                        val bg = cursor.getString(bgIndex)
+                        if (pkg != null && bg != null) result[pkg] = bg
+                    }
+                }
+            }
+            result
+        } catch (t: Throwable) {
+            Logger.warn("读取 PowerKeeper 配置库失败: ${t.javaClass.simpleName}: ${t.message}")
+            emptyMap()
+        } finally {
+            Binder.restoreCallingIdentity(token)
+        }
+    }
 
     /**
      * @param noRestrict true = 设为无限制；false = 恢复系统默认（重新纳入电池优化）

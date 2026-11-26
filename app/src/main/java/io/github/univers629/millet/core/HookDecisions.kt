@@ -12,17 +12,41 @@ object HookDecisions {
     /** DeviceIdleController 的 QUICK_DOZE_DELAY 状态值（OS3/OS4 独有，AOSP 只有 0..6）。 */
     const val STATE_QUICK_DOZE_DELAY = 7
 
+    /** DeviceIdleController 的 INACTIVE 状态值（熄屏后进入浅睡前的等待态）。 */
+    const val STATE_INACTIVE = 1
+
     /**
      * S34：`DeviceIdleController#isUpcomingAlarmClock` 是否该被短路。
      *
-     * 只有「本模块正在强制推进深睡」且「状态卡在 QUICK_DOZE_DELAY(7)」时才短路：
-     * 此时 OS4 的 `stepIdleStateLocked` 会先 `becomeActiveLocked("alarm")` 再
-     * `becomeInactiveIfAppropriateLocked()`，后者再把状态推回 7，推进循环无法前进。
+     * 短路条件收紧为「本模块正在强制推进深睡」且状态卡在 `QUICK_DOZE_DELAY(7)` 或
+     * `INACTIVE(1)」，两种状态的成因不同但结果一样，都会让推进循环原地退出：
+     *
+     * - `QUICK_DOZE_DELAY(7)`：OS4 的 `stepIdleStateLocked` 先 `becomeActiveLocked("alarm")`
+     *   再 `becomeInactiveIfAppropriateLocked()`，后者把状态推回 7。
+     * - `INACTIVE(1)`：OS3 的 `stepIdleStateLocked` 在 case 1 之前就返回，日志停在
+     *   `Unable to go deep idle; stopped at INACTIVE`。实测 OS3.0.304.0.WOMCNXM 上
+     *   微信每 15 分钟挂一次 `FLAG_WAKE_FROM_IDLE` 闹钟（window +11m15s），使
+     *   `isUpcomingAlarmClock()` 长期为真，强制推进永远走不出 1。
      *
      * 其他情形一律放行 ROM 原逻辑 —— 尤其非强制路径，短路会把用户设定的闹钟推迟。
      */
     fun bypassUpcomingAlarmWhileForced(forceIdle: Boolean?, state: Int?): Boolean =
-        forceIdle == true && state == STATE_QUICK_DOZE_DELAY
+        forceIdle == true && (state == STATE_QUICK_DOZE_DELAY || state == STATE_INACTIVE)
+
+    /**
+     * P7/P8：PowerKeeper 同步 Doze 白名单时，是否放行这一次改动。
+     *
+     * `unrestrictedInDatabase` 取自 PowerKeeper `userTable.bgControl`，是系统设置里「省电策略」
+     * 显示的真值。方向一致才放行（库中「无限制」时放行添加、非「无限制」时放行移除），
+     * 方向相反说明 PowerKeeper 在自动改动用户的选择，仍然拦截。
+     *
+     * `null` 表示读不到该包的配置行（进程内读库失败、或库里确实没有这一行）：
+     * 此时按「未知」拦截，与旧行为一致，避免在没有依据时放开自动改动。
+     *
+     * 只在「短时租约已过期」后才需要这个判断：租约覆盖的是设置刚改完的那一次同步。
+     */
+    fun allowPowerSaveMutation(isAdd: Boolean, unrestrictedInDatabase: Boolean?): Boolean =
+        unrestrictedInDatabase != null && unrestrictedInDatabase == isAdd
 
     /**
      * P34：`AppClusterController#isControlApp(int)` 的接管结果。

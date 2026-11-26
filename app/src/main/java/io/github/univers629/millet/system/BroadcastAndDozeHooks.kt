@@ -478,14 +478,17 @@ object BroadcastAndDozeHooks {
     /**
      * S34：DeviceIdleController#isUpcomingAlarmClock()
      *
-     * OS4 在 QUICK_DOZE_DELAY(7) 下自锁：`stepIdleStateLocked` 开头只要判定「30 分钟内有一次
-     * 从 idle 唤醒的闹钟」则先 `becomeActiveLocked("alarm")` 再 `becomeInactiveIfAppropriateLocked()`，
-     * 而后者在 QuickDoze 打开时再把状态推回 7，`force-idle deep` 的推进循环无法前进，
-     * 最后以 `Unable to go deep idle; stopped at QUICK_DOZE_DELAY` 失败退出。
+     * `stepIdleStateLocked` 开头只要判定「一次从 idle 唤醒的闹钟即将到来」就先
+     * `becomeActiveLocked("alarm")` 再 `becomeInactiveIfAppropriateLocked()`，强制推进被原地打断：
      *
-     * 强制进入深睡是本模块的明确意图，此时跳过「让闹钟先响」这条保护，状态机才能从 7 走到 IDLE(5)。
-     * 只在 `mForceIdle == true` 且状态为 7 时短路，其余路径保持 ROM 原样（该判定还决定闹钟重排时间，
-     * 短路后按 QUICK_DOZE_DELAY_TIMEOUT 重排，不影响其他行为）。
+     * - OS4 在 QUICK_DOZE_DELAY(7) 下自锁：`becomeInactiveIfAppropriateLocked()` 在 QuickDoze
+     *   打开时把状态推回 7，推进循环无法前进，最终 `stopped at QUICK_DOZE_DELAY`。
+     * - OS3 在 INACTIVE(1) 下直接返回，最终 `stopped at INACTIVE`（微信等应用挂
+     *   `FLAG_WAKE_FROM_IDLE` 周期闹钟时长期成立）。
+     *
+     * 强制进入深睡是本模块的明确意图，此时跳过「让闹钟先响」这条保护，状态机才能继续推进。
+     * 只在 `mForceIdle == true` 且状态为 7 或 1 时短路，其余路径保持 ROM 原样（该判定还决定
+     * 闹钟重排时间，短路后按 QUICK_DOZE_DELAY_TIMEOUT 重排，不影响其他行为）。
      */
     fun buildS34DeviceIdleUpcomingAlarmHook(): HookSpec = HookSpec(
         id = "S34",
@@ -501,7 +504,7 @@ object BroadcastAndDozeHooks {
             val forced = runCatching {
                 XReflect.getObjectField(controller, "mForceIdle") as? Boolean
             }.getOrNull()
-            // 只在「强制推进 + 卡在 QUICK_DOZE_DELAY」时短路，其余路径保持 ROM 原行为。
+            // 只在「强制推进 + 卡在 QUICK_DOZE_DELAY(7) 或 INACTIVE(1)」时短路，其余路径保持 ROM 原行为。
             val state = runCatching {
                 XReflect.getIntField(controller, "mState").takeIf { it in 0..7 }
             }.getOrNull()

@@ -9,17 +9,32 @@ import org.junit.Test
 class HookDecisionsTest {
 
     @Test
-    fun `bypassUpcomingAlarmWhileForced needs both forced flag and quick doze state`() {
-        // 只有「强制推进 + 卡在 QUICK_DOZE_DELAY(7)」才短路。
+    fun `bypassUpcomingAlarmWhileForced needs forced flag and a stuck state`() {
+        // 强制推进 + 卡在 QUICK_DOZE_DELAY(7) 或 INACTIVE(1)：OS4/OS3 都在这里被闹钟判定打断。
         assertTrue(HookDecisions.bypassUpcomingAlarmWhileForced(true, HookDecisions.STATE_QUICK_DOZE_DELAY))
-        // 强制但状态不在 7：ROM 的闹钟保护照常生效，避免把用户闹钟推迟。
+        assertTrue(HookDecisions.bypassUpcomingAlarmWhileForced(true, HookDecisions.STATE_INACTIVE))
+        // 强制但状态不在这两档：ROM 的闹钟保护照常生效，避免把用户闹钟推迟。
         assertFalse(HookDecisions.bypassUpcomingAlarmWhileForced(true, 0))
         assertFalse(HookDecisions.bypassUpcomingAlarmWhileForced(true, 5))
         assertFalse(HookDecisions.bypassUpcomingAlarmWhileForced(true, null))
         // 未强制：无论状态如何都不接管。
         assertFalse(HookDecisions.bypassUpcomingAlarmWhileForced(false, HookDecisions.STATE_QUICK_DOZE_DELAY))
+        assertFalse(HookDecisions.bypassUpcomingAlarmWhileForced(false, HookDecisions.STATE_INACTIVE))
         // 反射读不到 mForceIdle 时按「未强制」处理，保持 ROM 原行为。
         assertFalse(HookDecisions.bypassUpcomingAlarmWhileForced(null, HookDecisions.STATE_QUICK_DOZE_DELAY))
+    }
+
+    @Test
+    fun `allowPowerSaveMutation follows the choice stored in the database`() {
+        // 库里是「无限制」：放行添加，拦截自动移除。
+        assertTrue(HookDecisions.allowPowerSaveMutation(isAdd = true, unrestrictedInDatabase = true))
+        assertFalse(HookDecisions.allowPowerSaveMutation(isAdd = false, unrestrictedInDatabase = true))
+        // 库里不是「无限制」：放行移除（用户已改回默认），拦截自动添加。
+        assertTrue(HookDecisions.allowPowerSaveMutation(isAdd = false, unrestrictedInDatabase = false))
+        assertFalse(HookDecisions.allowPowerSaveMutation(isAdd = true, unrestrictedInDatabase = false))
+        // 读不到配置行时按「未知」处理，保持拦截。
+        assertFalse(HookDecisions.allowPowerSaveMutation(isAdd = true, unrestrictedInDatabase = null))
+        assertFalse(HookDecisions.allowPowerSaveMutation(isAdd = false, unrestrictedInDatabase = null))
     }
 
     @Test

@@ -23,6 +23,7 @@ import io.github.univers629.millet.core.UnifiedHookParam
 import io.github.univers629.millet.core.VersionGate
 import io.github.univers629.millet.ipc.MilletIpcContract
 import io.github.univers629.millet.ipc.PowerKeeperBinderClient
+import io.github.univers629.millet.system.BatteryPolicyApplier
 
 /**
  * 作用域 `"com.miui.powerkeeper"` 的策略与环境检测 Hook。
@@ -525,6 +526,10 @@ object PowerKeeperHooks {
      * P31（全版本 MIUI 14 ~ OS4）：PowerSaveConfigureManager#setPowerSaveAppConfigure(Bundle)
      * 记录用户在系统设置「省电策略」中的主动修改意图（短时租约），让随后约 1 秒内触发的
      * `DeviceIdleController -> CommonAdapter` Doze 白名单同步不被 P7/P8 误拦。
+     *
+     * 返回 -1 表示库中没有该包的 `user_configure` 行，ROM 这次写入直接放弃；随后
+     * `getPowerSaveAppConfigure` 会按「未在 Doze 白名单」把策略回退成智能推荐。
+     * 此时由模块补写配置行，把用户的选择落到库里。
      */
     private fun buildP31SetPowerSaveAppConfigureHook(): HookSpec = HookSpec(
         id = "P31_USER_POWER_SAVE_CONFIG",
@@ -532,7 +537,7 @@ object PowerKeeperHooks {
         targetClass = CLASS_POWER_SAVE_CONFIGURE_MANAGER,
         methodName = "setPowerSaveAppConfigure",
         paramTypes = listOf(Bundle::class.java),
-        mode = HookMode.BEFORE,
+        mode = HookMode.BEFORE_AND_AFTER,
         before = { param ->
             val bundle = param.args.getOrNull(0) as? Bundle ?: return@HookSpec
             val pkg = bundle.getString("App")?.takeIf { it.isNotBlank() } ?: return@HookSpec
@@ -546,6 +551,15 @@ object PowerKeeperHooks {
             if (PrefReader.powerKeeperPrefs.isLog && !PowerKeeperState.isInsideGetPowerSaveConfigure()) {
                 Logger.info("记录系统设置手动省电策略: $pkg -> $cfg")
             }
+        },
+        after = { param ->
+            if ((param.result as? Int) != -1) return@HookSpec
+            val bundle = param.args.getOrNull(0) as? Bundle ?: return@HookSpec
+            val pkg = bundle.getString("App")?.takeIf { it.isNotBlank() } ?: return@HookSpec
+            if (bundle.getString("AppConfigure") != "no_restrict") return@HookSpec
+            if (PowerKeeperState.isInsideGetPowerSaveConfigure()) return@HookSpec
+            val applied = BatteryPolicyApplier.apply(pkg, true)
+            Logger.warn("系统设置手动「无限制」未落库: $pkg，补写策略=${applied}")
         }
     )
 
