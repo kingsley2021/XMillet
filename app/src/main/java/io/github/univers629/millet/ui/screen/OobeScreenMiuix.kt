@@ -371,10 +371,15 @@ fun OobeScreenMiuix(
             MiuixTheme(colors = permLightColors) {
                 val colorScheme = permLightColors
                 // 权限页与设置/应用策略子页同一套顶栏实现：页面背景作为采样源，
-                // 顶栏走渐进式模糊，返回键常驻圆形液态玻璃。
+                // 顶栏走渐进式模糊，返回键在列表滚过顶部后才浮起圆形液态玻璃。
                 val permBackdrop = rememberBlurBackdrop(LocalEnableBlur.current)
                 val permScrollBehavior = MiuixScrollBehavior()
                 val permListState = rememberLazyListState()
+                // 这一页内容通常不足一屏，列表不产生滚动；此时只有拖动折叠顶栏才会出现内容重叠，
+                // 因此浮起态 = 已滚过顶部 || 正在拖动，静止时保持纯图标。
+                val permContentScrolled = {
+                    permListState.canScrollBackward || permListState.isScrollInProgress
+                }
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
@@ -395,6 +400,7 @@ fun OobeScreenMiuix(
                                     color = Color.Transparent,
                                     titleColor = colorScheme.onSurface,
                                     scrollBehavior = permScrollBehavior,
+                                    contentScrolledSignal = permContentScrolled,
                                     // 权限页不画顶栏背景，包括关闭模糊时的纯白色带。
                                     bandless = true,
                                     navigationIcon = {

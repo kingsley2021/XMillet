@@ -297,6 +297,7 @@ fun SettingsContent(
                     color = barColor,
                     title = "设置",
                     scrollBehavior = scrollBehavior,
+                    contentScrolledSignal = { pageListState.canScrollBackward },
                 )
             }
         },

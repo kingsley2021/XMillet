@@ -267,6 +267,7 @@ fun HomeScreenMiuix(
                         )
                     },
                     scrollBehavior = scrollBehavior,
+                    contentScrolledSignal = { pageListState.canScrollBackward },
                 )
             }
         },

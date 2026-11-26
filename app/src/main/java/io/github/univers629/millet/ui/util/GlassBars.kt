@@ -5,12 +5,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.CompositionLocalProvider
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
 import top.yukonga.miuix.kmp.utils.MiuixPopupUtils.Companion.PopupLayout
@@ -78,6 +76,17 @@ fun MilletTopAppBar(
      * - 高斯模糊 / 关闭模糊：色带完全透明，任何时候都不出现。
      */
     bandless: Boolean = false,
+    /**
+     * 内容是否已滑到顶栏下方的信号（必须传 `listState.canScrollBackward` 一类的页面级状态）。
+     *
+     * miuix 的官方建议就是用列表的 `canScrollBackward` 表示顶栏按钮的浮起态；只看
+     * [ScrollBehavior] 的 `contentOffset`／`overscrollOffset` 时，这两个值是以 px 计的累计量，
+     * 系统「最小宽度 / DPI」改变后 density 随之变化，轻量滚动可能凑不满原先写死的 1px 阈值
+     * （位移还会被 overscroll / PullToRefresh 吸收），圆形液态玻璃不再浮起。
+     *
+     * 这里不给默认值：任何顶栏都必须显式说明自己的滚动来源，避免新页面再漏接。
+     */
+    contentScrolledSignal: () -> Boolean,
 ) {
     val backdrop = LocalBarBackdrop.current
     val progressive = LocalEnableProgressiveBlur.current && backdrop != null
@@ -95,13 +104,17 @@ fun MilletTopAppBar(
         color.isSpecified -> GlassTopAppBarDefaults.bandBrush(color)
         else -> GlassTopAppBarDefaults.bandBrush(MiuixTheme.colorScheme.surface)
     }
-    // 顶栏按钮的圆形液态玻璃是顶栏自身的材质，与内容是否滚过顶部无关：
-    // 背景模糊开启且有采样源时按钮常驻圆形玻璃；关闭模糊时退回纯图标。
-    // 菜单展开期间额外强制浮起，保证 popup 有可见的圆形锚点。
-    val activation = remember { BarGlassActivationState() }
-    val floating = activation.activeCount > 0 || (blurEnabled && backdrop != null)
+    // 与 Miuix 一致：顶栏被内容遮挡时，按钮才浮起圆形液态玻璃。
+    // 「被遮挡」含三种情形：列表已滚过顶部、大标题已折叠（正文压在顶栏下方）、滚动或回弹偏移越过顶边。
+    // 三者都为 0 时页面静止且无遮挡，按钮保持纯图标；判定不随窗口宽度或屏幕密度变化。
+    // 菜单展开只抬该按钮的 popup 锚点，不改变整条顶栏的浮起态。
+    val scrollState = scrollBehavior?.state
+    val collapsedFraction = scrollState?.collapsedFraction ?: 0f
+    val contentScrolled = contentScrolledSignal() ||
+        collapsedFraction > 0f ||
+        (scrollState != null && (scrollState.contentOffset < 0f || scrollState.overscrollOffset < 0f))
+    val floating = progressive && contentScrolled
     CompositionLocalProvider(
-        LocalBarGlassActivationState provides activation,
         LocalBarGlassFloating provides floating,
     ) {
         GlassTopAppBar(
@@ -133,21 +146,7 @@ fun MilletTopAppBar(
     }
 }
 
-/**
- * 顶栏玻璃按钮的「菜单展开 / 按住」计数。
- *
- * 顶栏按钮的圆形液态玻璃常驻（见 [MilletTopAppBar] 的 floating 计算），但菜单展开的那一帧
- * 仍要额外强制浮起：popup 需要从一个可见的圆形锚点变形展开，否则会从一片透明里长出来。
- * [BarIconButton] 的 holdDownState 汇总到这里。
- */
-private class BarGlassActivationState {
-    var activeCount by mutableIntStateOf(0)
-}
-
-/** 当前顶栏下已展开菜单的按钮数量；不在顶栏内时为 null。 */
-private val LocalBarGlassActivationState = compositionLocalOf<BarGlassActivationState?> { null }
-
-/** 顶栏是否处于浮起态（模糊开启时常驻，菜单展开时强制），供顶栏按钮同步菜单锚点。 */
+/** 顶栏是否处于浮起态（渐进模糊 + 内容已滚过顶部），供顶栏按钮同步菜单锚点。 */
 private val LocalBarGlassFloating = compositionLocalOf { false }
 
 /** 顶栏玻璃按钮之间的间距，与 Miuix Glass 示例页保持一致。 */
@@ -165,6 +164,7 @@ fun MilletSmallTopAppBar(
     actions: @Composable RowScope.() -> Unit = {},
     scrollBehavior: ScrollBehavior? = null,
     defaultWindowInsetsPadding: Boolean = true,
+    contentScrolledSignal: () -> Boolean,
     bandless: Boolean = false,
 ) = MilletTopAppBar(
     title = title,
@@ -177,6 +177,7 @@ fun MilletSmallTopAppBar(
     actions = actions,
     scrollBehavior = scrollBehavior,
     defaultWindowInsetsPadding = defaultWindowInsetsPadding,
+    contentScrolledSignal = contentScrolledSignal,
     bandless = bandless,
 )
 
@@ -212,15 +213,8 @@ fun BarIconButton(
     entry.icon = content
     BarPopupAnchorRegistry.last = entry
 
-    val activation = LocalBarGlassActivationState.current
-    DisposableEffect(activation, holdDownState) {
-        val state = activation
-        if (state != null && holdDownState) state.activeCount += 1
-        onDispose {
-            if (state != null && holdDownState) state.activeCount -= 1
-        }
-    }
-    val floating = LocalBarGlassFloating.current || holdDownState
+    // 菜单展开只抬该按钮自己的锚点，同栏其他按钮保持各自的浮起状态。
+    val floating = holdDownState || LocalBarGlassFloating.current
 
     GlassIconButton(
         onClick = { if (enabled) onClick() },
