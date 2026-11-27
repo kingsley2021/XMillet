@@ -69,11 +69,19 @@ internal class AppGateContext(
     private val isCurrentlyForeground: () -> Boolean = { false },
     private val serviceRoleProvider: () -> ServiceRoleProtection = { ServiceRoleProtection.NONE },
     private val hasForegroundService: () -> Boolean = { false },
+    private val isActiveLiveWallpaper: () -> Boolean = { false },
+    private val isActiveAutofillService: () -> Boolean = { false },
+    private val isForegroundBinderBound: () -> Boolean = { false },
+    private val isWidgetApp: () -> Boolean = { false },
 ) {
     private var cachedUidFrozen: Boolean? = null
     private var cachedForeground: Boolean? = null
     private var cachedServiceRole: ServiceRoleProtection? = null
     private var cachedFgs: Boolean? = null
+    private var cachedLiveWallpaper: Boolean? = null
+    private var cachedAutofillService: Boolean? = null
+    private var cachedForegroundBinder: Boolean? = null
+    private var cachedWidgetApp: Boolean? = null
 
     fun isUidFrozen(): Boolean =
         cachedUidFrozen ?: isUidFrozen.invoke().also { cachedUidFrozen = it }
@@ -86,6 +94,18 @@ internal class AppGateContext(
 
     fun hasForegroundService(): Boolean =
         cachedFgs ?: hasForegroundService.invoke().also { cachedFgs = it }
+
+    fun isActiveLiveWallpaper(): Boolean =
+        cachedLiveWallpaper ?: isActiveLiveWallpaper.invoke().also { cachedLiveWallpaper = it }
+
+    fun isActiveAutofillService(): Boolean =
+        cachedAutofillService ?: isActiveAutofillService.invoke().also { cachedAutofillService = it }
+
+    fun isForegroundBinderBound(): Boolean =
+        cachedForegroundBinder ?: isForegroundBinderBound.invoke().also { cachedForegroundBinder = it }
+
+    fun isWidgetApp(): Boolean =
+        cachedWidgetApp ?: isWidgetApp.invoke().also { cachedWidgetApp = it }
 }
 
 /**
@@ -144,7 +164,8 @@ internal object GateDecision {
      * - 核心系统 UID（`< 10000`）与用户免冻白名单始终随亮屏放行；
      * - 当前正处于屏幕前台/可见的应用放行；
      * - 系统默认输入法、无障碍服务（含未就绪保守态）放行；
-     * - 未配置后台解冻压制且拥有活跃前台服务的 `notFreezeWhenHasFgsSet` 应用放行。
+     * - 当前动态壁纸、当前自动填充服务与前台 Binder 关联 UID 放行；
+     * - 未配置后台解冻压制且未强制冻结的桌面小组件应用及拥有活跃前台服务的 `notFreezeWhenHasFgsSet` 应用放行。
      */
     fun decideScreenOnThawExempt(ctx: AppGateContext, prefs: PrefsSnapshot): Boolean {
         if (AppUidUtils.appIdOf(ctx.uid) in 0 until 10000) return true
@@ -153,10 +174,19 @@ internal object GateDecision {
         if (AppUidUtils.containsPolicyTarget(prefs.whiteAppSet, pkg, ctx.uid)) return true
         if (ctx.isCurrentlyForeground()) return true
         if (ctx.serviceRoleProtection().blocksFreeze) return true
+        if (ctx.isActiveLiveWallpaper() || ctx.isActiveAutofillService() || ctx.isForegroundBinderBound()) {
+            return true
+        }
         if (AppUidUtils.containsPolicyTarget(prefs.blockThawSet, pkg, ctx.uid) ||
             AppUidUtils.containsPolicyTarget(prefs.ignoreNetworkWakeSet, pkg, ctx.uid)
         ) {
             return false
+        }
+        if (ctx.uid >= 10000 &&
+            !AppUidUtils.containsPolicyTarget(prefs.forceFreezeSet, pkg, ctx.uid) &&
+            ctx.isWidgetApp()
+        ) {
+            return true
         }
         return ctx.uid >= 10000 &&
             !AppUidUtils.containsPolicyTarget(prefs.forceFreezeSet, pkg, ctx.uid) &&

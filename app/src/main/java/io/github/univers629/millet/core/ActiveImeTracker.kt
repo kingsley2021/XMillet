@@ -21,11 +21,17 @@ object ActiveImeTracker {
 
     private const val REFRESH_FALLBACK_INTERVAL_MS = 30_000L
 
+    /** `Settings.Secure.AUTOFILL_SERVICE`（SDK 隐藏常量），格式为 `package/class`。 */
+    const val SETTING_AUTOFILL_SERVICE = "autofill_service"
+
     @Volatile
     private var cachedImePackage: String? = null
 
     @Volatile
     private var cachedAccessibilityPackages: Set<String> = emptySet()
+
+    @Volatile
+    private var cachedAutofillPackage: String? = null
 
     @Volatile
     private var lastRefreshUptimeMs: Long = 0L
@@ -65,6 +71,7 @@ object ActiveImeTracker {
             observerRegistered.set(false)
             cachedImePackage = null
             cachedAccessibilityPackages = emptySet()
+            cachedAutofillPackage = null
             userServices.clear()
             userRefreshInFlight.clear()
             mainRefreshInFlight.set(false)
@@ -115,6 +122,23 @@ object ActiveImeTracker {
         val ctx = context ?: return cachedAccessibilityPackages
         if (!isCacheFresh()) requestBackgroundRefresh(ctx)
         return cachedAccessibilityPackages
+    }
+
+    fun resolveAutofillPackage(context: Context?): String? {
+        val ctx = context ?: return cachedAutofillPackage
+        if (!isCacheFresh()) requestBackgroundRefresh(ctx)
+        return cachedAutofillPackage
+    }
+
+    /**
+     * 判断指定应用是否为目标用户当前启用的自动填充服务。
+     *
+     * 仅用于亮屏解冻精准豁免，不参与冻结硬阻断；缓存未就绪时触发后台刷新并返回 false。
+     */
+    fun isActiveAutofillService(context: Context?, packageName: String?, uid: Int): Boolean {
+        if (!AppUidUtils.isManagedAppUid(uid) || packageName.isNullOrEmpty()) return false
+        val roles = resolveUserServices(context, AppUidUtils.userIdOf(uid))?.roles ?: return false
+        return packageName == roles.autofillPackage
     }
 
     private fun isCacheFresh(): Boolean {
@@ -222,7 +246,13 @@ object ActiveImeTracker {
         val ime = readSetting(Settings.Secure.DEFAULT_INPUT_METHOD)
         val enabled = readSetting(Settings.Secure.ACCESSIBILITY_ENABLED)
         val services = readSetting(Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
-        UserServiceRoles(parseImePackage(ime), parseAccessibilityPackages(enabled?.toIntOrNull() ?: 0, services))
+        // 自动填充读取失败不影响输入法与无障碍的硬保护状态，按无自动填充处理。
+        val autofill = runCatching { readSetting(SETTING_AUTOFILL_SERVICE) }.getOrNull()
+        UserServiceRoles(
+            imePackage = parseImePackage(ime),
+            accessibilityPackages = parseAccessibilityPackages(enabled?.toIntOrNull() ?: 0, services),
+            autofillPackage = parseImePackage(autofill),
+        )
     }.getOrNull()
 
     private fun refresh(context: Context): String? {
@@ -233,8 +263,12 @@ object ActiveImeTracker {
             val imePkg = parseImePackage(rawIme)
             val a11yEnabled = Settings.Secure.getInt(resolver, Settings.Secure.ACCESSIBILITY_ENABLED, 0)
             val rawA11y = Settings.Secure.getString(resolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES)
+            val rawAutofill = runCatching {
+                Settings.Secure.getString(resolver, SETTING_AUTOFILL_SERVICE)
+            }.getOrNull()
             cachedImePackage = imePkg
             cachedAccessibilityPackages = parseAccessibilityPackages(a11yEnabled, rawA11y)
+            cachedAutofillPackage = parseImePackage(rawAutofill)
             lastRefreshUptimeMs = SystemClock.uptimeMillis()
             imePkg
         } catch (_: Throwable) {
@@ -280,6 +314,13 @@ object ActiveImeTracker {
                     false,
                     observer
                 )
+                runCatching {
+                    resolver.registerContentObserver(
+                        Settings.Secure.getUriFor(SETTING_AUTOFILL_SERVICE),
+                        false,
+                        observer
+                    )
+                }
                 observerRegistered.set(true)
                 refresh(appCtx)
             } catch (_: Throwable) {

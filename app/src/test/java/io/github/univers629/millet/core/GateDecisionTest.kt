@@ -307,4 +307,86 @@ class GateDecisionTest {
             ),
         )
     }
+
+    @Test
+    fun `decideScreenOnThawExempt allows wallpaper, autofill, foreground binder and unrestricted widgets`() {
+        val prefs = PrefsSnapshot(
+            disableScreenOnThaw = true,
+            blockThawSet = setOf("com.example.blocked.widget"),
+            forceFreezeSet = setOf("com.example.forced.widget"),
+        )
+
+        assertEquals(
+            ThawGateVerdict.Allow(ThawAllowReason.SCREEN_ON_EXEMPT),
+            GateDecision.decideThaw(
+                AppGateContext(10301, "io.wallpaperengine.weclient", isUidFrozen = { true }, isActiveLiveWallpaper = { true }),
+                "screen on",
+                prefs,
+            ),
+        )
+        assertEquals(
+            ThawGateVerdict.Allow(ThawAllowReason.SCREEN_ON_EXEMPT),
+            GateDecision.decideThaw(
+                AppGateContext(10302, "com.x8bit.bitwarden", isUidFrozen = { true }, isActiveAutofillService = { true }),
+                "screen on",
+                prefs,
+            ),
+        )
+        assertEquals(
+            ThawGateVerdict.Allow(ThawAllowReason.SCREEN_ON_EXEMPT),
+            GateDecision.decideThaw(
+                AppGateContext(10303, "com.example.helper", isUidFrozen = { true }, isForegroundBinderBound = { true }),
+                "screen on",
+                prefs,
+            ),
+        )
+        assertEquals(
+            ThawGateVerdict.Allow(ThawAllowReason.SCREEN_ON_EXEMPT),
+            GateDecision.decideThaw(
+                AppGateContext(10304, "com.example.weather", isUidFrozen = { true }, isWidgetApp = { true }),
+                "screen on",
+                prefs,
+            ),
+        )
+
+        // 显式加入 blockThawSet 或 forceFreezeSet 的桌面小组件仍遵守用户压制策略。
+        assertEquals(
+            ThawGateVerdict.Intercept(InterceptRule.NO_SCREEN_ON_THAW),
+            GateDecision.decideThaw(
+                AppGateContext(10305, "com.example.blocked.widget", isUidFrozen = { true }, isWidgetApp = { true }),
+                "screen on",
+                prefs,
+            ),
+        )
+        assertEquals(
+            ThawGateVerdict.Intercept(InterceptRule.NO_SCREEN_ON_THAW),
+            GateDecision.decideThaw(
+                AppGateContext(10306, "com.example.forced.widget", isUidFrozen = { true }, isWidgetApp = { true }),
+                "screen on",
+                prefs,
+            ),
+        )
+    }
+
+    @Test
+    fun `screen-on exemption probes are not evaluated on freeze or non-screen-on thaw paths`() {
+        var probesCalled = 0
+        val prefs = PrefsSnapshot(disableScreenOnThaw = true, disableCharge = true)
+        val ctx = AppGateContext(
+            uid = 10310,
+            packageName = "com.example.app",
+            isUidFrozen = { true },
+            isActiveLiveWallpaper = { probesCalled++; true },
+            isActiveAutofillService = { probesCalled++; true },
+            isForegroundBinderBound = { probesCalled++; true },
+            isWidgetApp = { probesCalled++; true },
+        )
+
+        assertEquals(GateReason.ALLOW_FREEZE, GateDecision.decideFreeze(ctx, prefs, checkFgs = true))
+        assertEquals(
+            ThawGateVerdict.Intercept(InterceptRule.NO_CHARGE_THAW),
+            GateDecision.decideThaw(ctx, "CHARGE_CHANGE", prefs),
+        )
+        assertEquals(0, probesCalled)
+    }
 }

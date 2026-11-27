@@ -73,6 +73,7 @@ object BroadcastAndDozeHooks {
     private const val DOZE_SCHEDULE_DELAY_MS = 10_000L
 
     private const val SKIP_FROZEN_BROADCAST_REASON = "Skip frozen process by XMillet"
+    private const val ACTION_WALLPAPER_CHANGED = "android.intent.action.WALLPAPER_CHANGED"
 
     /** DeviceIdleController$Shell 实例缓存（用于执行深度睡眠 shell 指令） */
     @Volatile
@@ -213,10 +214,19 @@ object BroadcastAndDozeHooks {
         }
     }
 
+    private fun extractBroadcastAction(broadcastRecord: Any?): String? {
+        if (broadcastRecord == null) return null
+        return try {
+            (XReflect.getObjectField(broadcastRecord, "intent") as? Intent)?.action
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
     /**
      * S9（PA(1)）：BroadcastSkipPolicy#shouldSkipMessage(BroadcastRecord, BroadcastFilter)
      * 门控：`SDK_INT > 33`（Android 14+ 新广播管线）。
-     * 冻结中的非系统、非白名单应用直接返回非空跳过原因字符串。
+     * 冻结中的非系统、非白名单应用直接返回非空跳过原因字符串（核心网络状态广播交回系统处理）。
      */
     fun buildS9BroadcastSkipPolicyHook(): HookSpec = HookSpec(
         id = "S9",
@@ -269,6 +279,11 @@ object BroadcastAndDozeHooks {
                 return@HookSpec param.invokeOriginal()
             }
 
+            val action = extractBroadcastAction(param.args.getOrNull(0))
+            if (!HookDecisions.shouldSkipFrozenBroadcast(action)) {
+                return@HookSpec param.invokeOriginal()
+            }
+
             if (prefs.isLog) {
                 val now = android.os.SystemClock.uptimeMillis()
                 val last = skipBroadcastLogAt[procState.processName]
@@ -284,6 +299,10 @@ object BroadcastAndDozeHooks {
     /**
      * S10（PA(0)）：BroadcastQueue#deliverToRegisteredReceiverLocked(BroadcastRecord, BroadcastFilter, boolean, int)
      * 门控：`SDK_INT <= 33`（Android 13 旧广播管线，与 S9 严格二选一安装）。
+     *
+     * 对冻结中的非系统、非白名单应用在投递瞬间临时置空 `receiverList.app` 以跳过派发，
+     * 并在 `finally` 中恢复原引用，避免进程解冻后动态广播接收器永久失效；
+     * 核心网络状态广播不拦截，直接交回系统原路径。
      */
     fun buildS10BroadcastQueueDeliverHook(): HookSpec = HookSpec(
         id = "S10",
@@ -328,21 +347,23 @@ object BroadcastAndDozeHooks {
             }
 
             procState.lock.lock()
+            var clearedReceiverApp = false
             try {
                 if (SystemState.greezeService != null && SystemState.isUidFrozen(procState.uid)) {
-                    XReflect.setObjectField(receiverList, "app", null)
-                    if (prefs.isLog) {
-                        val action = try {
-                            val intent = XReflect.getObjectField(broadcastRecord, "intent") as? Intent
-                            intent?.action ?: "unknown"
-                        } catch (_: Throwable) {
-                            "unknown"
+                    val action = extractBroadcastAction(broadcastRecord)
+                    if (HookDecisions.shouldSkipFrozenBroadcast(action)) {
+                        XReflect.setObjectField(receiverList, "app", null)
+                        clearedReceiverApp = true
+                        if (prefs.isLog) {
+                            Logger.info("屏蔽进程[${procState.processName}]冻结时收到的广播[${action ?: "unknown"}]")
                         }
-                        Logger.info("屏蔽进程[${procState.processName}]冻结时收到的广播[$action]")
                     }
                 }
                 param.invokeOriginal()
             } finally {
+                if (clearedReceiverApp) {
+                    runCatching { XReflect.setObjectField(receiverList, "app", appProcessRecord) }
+                }
                 procState.lock.unlock()
             }
         }
@@ -1382,6 +1403,7 @@ object BroadcastAndDozeHooks {
                     addAction(Intent.ACTION_SCREEN_OFF)
                     addAction(Intent.ACTION_POWER_CONNECTED)
                     addAction(Intent.ACTION_POWER_DISCONNECTED)
+                    addAction(ACTION_WALLPAPER_CHANGED)
                 }
                 val receiver = object : BroadcastReceiver() {
                     override fun onReceive(ctx: Context?, intent: Intent?) {
@@ -1401,6 +1423,10 @@ object BroadcastAndDozeHooks {
 
     private fun handleScreenBroadcast(action: String?) {
         if (action == null) return
+        if (action == ACTION_WALLPAPER_CHANGED) {
+            if (!hotReloading) SystemState.refreshLiveWallpaperCacheAsync(force = true)
+            return
+        }
         Logger.alwaysWarn("屏幕广播:$action hot=$hotReloading ready=${SystemState.isGreezeReady}")
         when (action) {
             Intent.ACTION_SCREEN_ON -> ForegroundState.setScreenState(true)
@@ -1463,21 +1489,35 @@ object BroadcastAndDozeHooks {
                     }
                 }
                 if (prefs.disableScreenOnThaw) {
+                    val sysCtx = SystemState.systemContext
                     val protectedPkgs = buildList {
-                        ActiveImeTracker.resolveDefaultImePackage(SystemState.systemContext)?.let(::add)
-                        addAll(ActiveImeTracker.resolveAccessibilityPackages(SystemState.systemContext))
+                        ActiveImeTracker.resolveDefaultImePackage(sysCtx)?.let(::add)
+                        addAll(ActiveImeTracker.resolveAccessibilityPackages(sysCtx))
                     }
+                    val screenOnExemptPkgs = LinkedHashSet<String>().apply {
+                        ActiveImeTracker.resolveAutofillPackage(sysCtx)?.let(::add)
+                        addAll(SystemState.getActiveLiveWallpaperPackages())
+                    }
+                    val thawTargets = LinkedHashSet<Int>()
                     for (svcPkg in protectedPkgs.distinct()) {
                         val svcUid = SystemState.getPackageUid(svcPkg)
-                        if (svcUid <= 0 ||
-                            !ActiveImeTracker.isProtectedSystemServiceApp(SystemState.systemContext, svcPkg, prefs, svcUid)
+                        if (svcUid > 0 &&
+                            ActiveImeTracker.isProtectedSystemServiceApp(sysCtx, svcPkg, prefs, svcUid)
                         ) {
-                            continue
+                            thawTargets.add(svcUid)
                         }
-                        if (SystemState.isUidFrozen(svcUid)) {
+                    }
+                    for (exemptPkg in screenOnExemptPkgs) {
+                        val exemptUid = SystemState.getPackageUid(exemptPkg)
+                        if (AppUidUtils.isManagedAppUid(exemptUid)) {
+                            thawTargets.add(exemptUid)
+                        }
+                    }
+                    for (targetUid in thawTargets) {
+                        if (SystemState.isUidFrozen(targetUid)) {
                             handler.post {
                                 SystemState.greezeService?.let { greeze ->
-                                    runCatching { XReflect.callMethod(greeze, "thawUid", svcUid, 1000, "screen on") }
+                                    runCatching { XReflect.callMethod(greeze, "thawUid", targetUid, 1000, "screen on") }
                                 }
                             }
                         }

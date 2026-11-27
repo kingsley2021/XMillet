@@ -203,6 +203,12 @@ object FreezeGateHooks {
             }
         },
         hasForegroundService = { SystemState.checkAppFgService(uid) },
+        isActiveLiveWallpaper = { SystemState.isActiveLiveWallpaper(uid, pkg) },
+        isActiveAutofillService = {
+            !pkg.isNullOrEmpty() && ActiveImeTracker.isActiveAutofillService(SystemState.systemContext, pkg, uid)
+        },
+        isForegroundBinderBound = { SystemState.isForegroundBinderBound(uid) },
+        isWidgetApp = { SystemState.isWidgetApp(uid, pkg) },
     )
 
     private fun thawInterceptRule(uid: Int, pkg: String?, reason: String, prefs: PrefsSnapshot): InterceptRule? =

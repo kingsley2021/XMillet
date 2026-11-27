@@ -133,6 +133,30 @@ object HookDecisions {
         return incoming.total >= current.total
     }
 
+    /**
+     * 冻结态广播跳过策略中需放行的核心网络状态变更动作。
+     *
+     * 丢弃这些动作会导致应用解冻回前台后无法重建网络状态；交回系统原路径处理。
+     */
+    val NETWORK_STATE_BROADCAST_ACTIONS: Set<String> = setOf(
+        "android.net.conn.CONNECTIVITY_CHANGE",
+        "android.net.wifi.STATE_CHANGE",
+        "android.net.wifi.WIFI_STATE_CHANGED",
+        "android.net.conn.INET_CONDITION_ACTION",
+    )
+
+    /** 判断广播动作是否属于核心网络状态变更。 */
+    fun isNetworkStateBroadcastAction(action: String?): Boolean =
+        !action.isNullOrEmpty() && action in NETWORK_STATE_BROADCAST_ACTIONS
+
+    /**
+     * S9 / S10：目标进程处于冻结态时，是否跳过本次动态广播投递。
+     *
+     * 核心网络状态广播返回 false（交回系统处理），其余广播返回 true（照常跳过）。
+     */
+    fun shouldSkipFrozenBroadcast(action: String?): Boolean =
+        !isNetworkStateBroadcastAction(action)
+
     /** 息屏快速冻结钳位阈值：将 OS1–OS3 原生 62,000ms 延迟缩短至 5,000ms。 */
     const val FAST_SCREEN_OFF_FREEZE_MS = 5_000
 

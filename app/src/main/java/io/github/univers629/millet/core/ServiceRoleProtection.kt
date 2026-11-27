@@ -12,6 +12,7 @@ internal enum class ServiceRoleProtection {
 internal data class UserServiceRoles(
     val imePackage: String?,
     val accessibilityPackages: Set<String>,
+    val autofillPackage: String? = null,
 )
 
 internal fun evaluateUserServiceProtection(

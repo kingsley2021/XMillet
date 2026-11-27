@@ -137,4 +137,28 @@ class HookDecisionsTest {
         assertEquals(0, HookDecisions.clampScreenOffFreezeDelayMs(0, fastScreenOffFreeze = true))
         assertEquals(-1, HookDecisions.clampScreenOffFreezeDelayMs(-1, fastScreenOffFreeze = true))
     }
+
+    @Test
+    fun `shouldSkipFrozenBroadcast allows core network state actions and skips others`() {
+        val networkActions = listOf(
+            "android.net.conn.CONNECTIVITY_CHANGE",
+            "android.net.wifi.STATE_CHANGE",
+            "android.net.wifi.WIFI_STATE_CHANGED",
+            "android.net.conn.INET_CONDITION_ACTION",
+        )
+        for (action in networkActions) {
+            assertTrue(HookDecisions.isNetworkStateBroadcastAction(action))
+            assertFalse(HookDecisions.shouldSkipFrozenBroadcast(action))
+        }
+        for (action in listOf(
+            "android.intent.action.BATTERY_CHANGED",
+            "android.intent.action.SCREEN_ON",
+            "com.example.CUSTOM_ACTION",
+            "",
+            null,
+        )) {
+            assertFalse(HookDecisions.isNetworkStateBroadcastAction(action))
+            assertTrue(HookDecisions.shouldSkipFrozenBroadcast(action))
+        }
+    }
 }

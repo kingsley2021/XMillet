@@ -302,6 +302,156 @@ object SystemState {
     }
 
     /**
+     * 判断指定 UID 当前是否与前台应用存在活跃 Binder 关联。
+     *
+     * 调用 `GreezeManagerService#isInFgBinderApp(int)` 仅读取其内部叶锁保护的集合，无额外状态副作用；
+     * 低版本 ROM 无此方法时返回 false。
+     */
+    fun isForegroundBinderBound(uid: Int): Boolean {
+        if (!AppUidUtils.isManagedAppUid(uid)) return false
+        val service = greezeService ?: return false
+        if (!RomCapabilities.hasMethod(service.javaClass, "isInFgBinderApp")) return false
+        return try {
+            (XReflect.callMethod(service, "isInFgBinderApp", uid) as? Boolean) ?: false
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private const val LIVE_WALLPAPER_CACHE_TTL_MS = 60_000L
+
+    @Volatile
+    private var cachedLiveWallpaperPackages: Set<String> = emptySet()
+
+    @Volatile
+    private var lastLiveWallpaperRefreshMs: Long = 0L
+
+    private val liveWallpaperRefreshInFlight = java.util.concurrent.atomic.AtomicBoolean(false)
+
+    private val wallpaperRefreshExecutor by lazy {
+        java.util.concurrent.Executors.newSingleThreadExecutor { task ->
+            Thread(task, "XMillet-WallpaperRefresh").apply { isDaemon = true }
+        }
+    }
+
+    /** 后台刷新当前生效的动态壁纸包名集合（桌面与锁屏），避免在钩子线程做跨服务查询。 */
+    fun refreshLiveWallpaperCacheAsync(force: Boolean = false) {
+        val ctx = systemContext ?: return
+        val now = android.os.SystemClock.uptimeMillis()
+        if (!force && lastLiveWallpaperRefreshMs > 0L && now - lastLiveWallpaperRefreshMs in 0..LIVE_WALLPAPER_CACHE_TTL_MS) {
+            return
+        }
+        if (!liveWallpaperRefreshInFlight.compareAndSet(false, true)) return
+        runCatching {
+            wallpaperRefreshExecutor.execute {
+                val token = android.os.Binder.clearCallingIdentity()
+                try {
+                    val wm = ctx.getSystemService(android.app.WallpaperManager::class.java)
+                        ?: android.app.WallpaperManager.getInstance(ctx)
+                    val pkgs = LinkedHashSet<String>()
+                    wm?.wallpaperInfo?.packageName?.takeIf { it.isNotEmpty() }?.let(pkgs::add)
+                    if (wm != null && VersionGate.isSdkAfter33) {
+                        for (which in intArrayOf(1, 2)) {
+                            val info = runCatching {
+                                XReflect.callMethod(wm, "getWallpaperInfo", which) as? android.app.WallpaperInfo
+                            }.getOrNull()
+                            info?.packageName?.takeIf { it.isNotEmpty() }?.let(pkgs::add)
+                        }
+                    }
+                    cachedLiveWallpaperPackages = pkgs
+                    lastLiveWallpaperRefreshMs = android.os.SystemClock.uptimeMillis()
+                } catch (_: Throwable) {
+                } finally {
+                    android.os.Binder.restoreCallingIdentity(token)
+                    liveWallpaperRefreshInFlight.set(false)
+                }
+            }
+        }.onFailure {
+            liveWallpaperRefreshInFlight.set(false)
+        }
+    }
+
+    /** 返回当前检测到的动态壁纸包名集合（合并 ROM 内存字段与异步 WallpaperManager 快照）。 */
+    fun getActiveLiveWallpaperPackages(): Set<String> {
+        refreshLiveWallpaperCacheAsync()
+        val result = LinkedHashSet<String>()
+        result.addAll(cachedLiveWallpaperPackages)
+        val aurogon = aurogonService
+        if (aurogon != null) {
+            for (fieldName in arrayOf("mDeskWallPaperPackageName", "mLockWallPaperPackageName", "mWallPaperPackageName")) {
+                val field = XReflect.findFieldOrNull(aurogon.javaClass, fieldName) ?: continue
+                val pkg = runCatching { field.get(aurogon) as? String }.getOrNull()
+                if (!pkg.isNullOrEmpty()) result.add(pkg)
+            }
+        }
+        return result
+    }
+
+    /**
+     * 判断指定应用是否为当前生效的桌面/锁屏动态壁纸。
+     *
+     * 优先无锁读取 `AurogonImmobulusMode` 已缓存的壁纸字段（覆盖 MIUI 14 至 HyperOS 4），
+     * 并结合后台刷新的 `WallpaperManager` 快照覆盖未及时同步的场景。
+     */
+    fun isActiveLiveWallpaper(uid: Int, packageName: String?): Boolean {
+        if (!AppUidUtils.isManagedAppUid(uid) || packageName.isNullOrEmpty()) return false
+        val aurogon = aurogonService
+        if (aurogon != null) {
+            val deskUid = XReflect.getIntFieldOr(aurogon, "mDeskWallPaperUid", default = -1)
+            val lockUid = XReflect.getIntFieldOr(aurogon, "mLockWallPaperUid", default = -1)
+            if ((deskUid > 0 && deskUid == uid) || (lockUid > 0 && lockUid == uid)) {
+                return true
+            }
+            for (fieldName in arrayOf("mDeskWallPaperPackageName", "mLockWallPaperPackageName", "mWallPaperPackageName")) {
+                val field = XReflect.findFieldOrNull(aurogon.javaClass, fieldName) ?: continue
+                val pkg = runCatching { field.get(aurogon) as? String }.getOrNull()
+                if (pkg == packageName) return true
+            }
+        }
+        refreshLiveWallpaperCacheAsync()
+        return packageName in cachedLiveWallpaperPackages
+    }
+
+    private data class WidgetCacheEntry(val bound: Boolean, val refreshedAtMs: Long)
+
+    private const val WIDGET_CACHE_TTL_MS = 30_000L
+    private val widgetBoundCache = ConcurrentHashMap<String, WidgetCacheEntry>()
+
+    /**
+     * 判断指定应用当前是否已绑定桌面小组件。
+     *
+     * 通过 `AppWidgetManager#isBoundWidgetPackage(String, int)` 查询，兼容 MIUI 14 至 HyperOS 4；
+     * 服务端要求 `Binder.getCallingUid() == SYSTEM_UID`，调用前清除调用身份并做短时缓存。
+     */
+    fun isWidgetApp(uid: Int, packageName: String?): Boolean {
+        if (!AppUidUtils.isManagedAppUid(uid) || packageName.isNullOrEmpty()) return false
+        val userId = AppUidUtils.userIdOf(uid)
+        val key = "$userId:$packageName"
+        val now = android.os.SystemClock.uptimeMillis()
+        widgetBoundCache[key]?.takeIf { now - it.refreshedAtMs in 0..WIDGET_CACHE_TTL_MS }?.let {
+            return it.bound
+        }
+        val ctx = systemContext ?: return false
+        val token = android.os.Binder.clearCallingIdentity()
+        val bound = try {
+            val awm = ctx.getSystemService(android.appwidget.AppWidgetManager::class.java)
+                ?: android.appwidget.AppWidgetManager.getInstance(ctx)
+            if (awm != null) {
+                (XReflect.callMethod(awm, "isBoundWidgetPackage", packageName, userId) as? Boolean) ?: false
+            } else {
+                false
+            }
+        } catch (_: Throwable) {
+            false
+        } finally {
+            android.os.Binder.restoreCallingIdentity(token)
+        }
+        if (widgetBoundCache.size >= 256) widgetBoundCache.clear()
+        widgetBoundCache[key] = WidgetCacheEntry(bound, now)
+        return bound
+    }
+
+    /**
      * 将模块配置的 `messageAppSet` 同步到 `AurogonImmobulusMode.mMessageApp` 静态列表，
      * 并在 SDK > 33 时更新 `mBroadcastTargetWhiteList`。
      */

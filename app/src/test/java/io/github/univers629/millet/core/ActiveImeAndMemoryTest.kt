@@ -69,14 +69,39 @@ class ActiveImeAndMemoryTest {
 
     @Test
     fun `known roles protect matches while unrelated packages remain freezable`() {
-        val roles = UserServiceRoles("com.example.ime", setOf("com.example.a11y"))
+        val roles = UserServiceRoles("com.example.ime", setOf("com.example.a11y"), "com.example.autofill")
         for (uid in listOf(10131, 99910131)) {
             assertEquals(ServiceRoleProtection.DEFAULT_IME, evaluateUserServiceProtection(uid, "com.example.ime") { roles })
             assertEquals(ServiceRoleProtection.ACCESSIBILITY, evaluateUserServiceProtection(uid, "com.example.a11y") { roles })
+            // 自动填充仅用于亮屏解冻豁免，不纳入冻结硬保护。
+            val autofill = evaluateUserServiceProtection(uid, "com.example.autofill") { roles }
+            assertEquals(ServiceRoleProtection.NONE, autofill)
+            assertFalse(autofill.blocksFreeze)
             val negative = evaluateUserServiceProtection(uid, "com.example.other") { roles }
             assertEquals(ServiceRoleProtection.NONE, negative)
             assertFalse(negative.blocksFreeze)
         }
+    }
+
+    @Test
+    fun `readUserServiceRoles parses autofill service and tolerates autofill read failure`() {
+        val parsed = ActiveImeTracker.readUserServiceRoles { key ->
+            when (key) {
+                ActiveImeTracker.SETTING_AUTOFILL_SERVICE -> "com.x8bit.bitwarden/com.x8bit.bitwarden.AutofillService"
+                else -> null
+            }
+        }
+        assertNotNull(parsed)
+        assertEquals("com.x8bit.bitwarden", parsed!!.autofillPackage)
+
+        val fallback = ActiveImeTracker.readUserServiceRoles { key ->
+            if (key == ActiveImeTracker.SETTING_AUTOFILL_SERVICE) {
+                throw SecurityException("autofill read denied")
+            }
+            null
+        }
+        assertNotNull(fallback)
+        assertNull(fallback!!.autofillPackage)
     }
 
     @Test
