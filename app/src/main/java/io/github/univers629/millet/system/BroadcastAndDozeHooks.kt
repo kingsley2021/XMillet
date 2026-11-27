@@ -15,6 +15,9 @@ import android.os.SystemClock
 import io.github.univers629.millet.core.ActiveImeTracker
 import io.github.univers629.millet.core.AppUidUtils
 import io.github.univers629.millet.core.ConditionalDozeLifecycle
+import io.github.univers629.millet.core.DozeDiagnostics
+import io.github.univers629.millet.core.DozeLiveState
+import io.github.univers629.millet.core.DozeRetryPolicy
 import io.github.univers629.millet.core.XReflect
 import io.github.univers629.millet.core.HookDecisions
 import io.github.univers629.millet.core.HookMode
@@ -75,6 +78,18 @@ object BroadcastAndDozeHooks {
     private val dozeLifecycle = ConditionalDozeLifecycle()
     private var deepDozeAlarmListener: AlarmManager.OnAlarmListener? = null
     private var deepDozeAlarmToken: Long? = null
+
+    /** 浅睡兜底后补试深睡的闹钟监听（与主闹钟分开保存，便于统一取消）。 */
+    private var deepDozeRetryListener: AlarmManager.OnAlarmListener? = null
+
+    /** 最近一次熄屏调度使用的 Handler，补试闹钟需要它把回调投递回 system_server。 */
+    private var deepDozeHandler: Handler? = null
+
+    /** 本次熄屏周期是否已经补试过，避免被闹钟窗口反复拖延时反复补试。 */
+    private var dozeRetryUsed: Boolean = false
+
+    /** 是否由本模块设置了浅睡强制（补试前需要先撤掉，否则 `permitsForce` 恒为 false）。 */
+    private var dozeLightFallbackActive: Boolean = false
 
     private val receiverLifecycleLock = Any()
 
@@ -599,6 +614,44 @@ object BroadcastAndDozeHooks {
     )
 
     /**
+     * S40：DeviceIdleController#addEvent(int cmd, String reason)
+     *
+     * `stepIdleStateLocked`（S39）在部分 ROM 上被 `dex2oat` 内联或方法体过大而无法稳定重装，进入深睡与
+     * 维护切换仍可能漏观测。`addEvent` 是状态机每记录一次迁移都会调用的 5 条指令私有方法，直接读取
+     * 其命令码即可拿到 ROM 自己认可的深度事件：
+     *
+     * - `EVENT_DEEP_IDLE(4)` → `IDLE(5)` 进入或维护结束
+     * - `EVENT_DEEP_MAINTENANCE(5)` → `IDLE_MAINTENANCE(6)` 维护开始
+     * - `EVENT_NORMAL(1)` → 回到 `ACTIVE(0)`，深度会话结束
+     *
+     * 浅睡事件（`EVENT_LIGHT_IDLE` / `EVENT_LIGHT_MAINTENANCE`）不参与深度统计，直接忽略，
+     * 避免浅睡维护把深度会话提前截断。
+     */
+    fun buildS40DeviceIdleEventHook(): HookSpec = HookSpec(
+        id = "S40_DOZE_EVENT",
+        name = "DeviceIdleController#addEvent",
+        targetClass = CLASS_DEVICE_IDLE_CONTROLLER,
+        methodName = "addEvent",
+        paramTypes = listOf(Int::class.javaPrimitiveType!!, String::class.java),
+        mode = HookMode.AFTER,
+        successLog = "Doze 事件记录点订阅成功",
+        after = { param ->
+            val cmd = (param.args.getOrNull(0) as? Int) ?: return@HookSpec
+            val state = HookDecisions.dozeEventToState(cmd) ?: return@HookSpec
+            val prefs = PrefReader.systemPrefs
+            if (!prefs.freezeStats || !SystemState.isGreezeReady) return@HookSpec
+            if (param.thisObject != null && SystemState.deviceIdleController == null) {
+                SystemState.deviceIdleController = param.thisObject
+            }
+            val wallMs = System.currentTimeMillis()
+            val elapsedMs = SystemClock.elapsedRealtime()
+            Logger.postIoTask {
+                FreezeStatsRecorder.onDozeStateObserved(state, wallMs, elapsedMs)
+            }
+        }
+    )
+
+    /**
      * 从 `system_server` 内存中的 `DeviceIdleController` 事件环形缓冲区（`mEventCmds`/`mEventTimes`）
      * 按需提取本次开机以来已结束的深度睡眠区间；零轮询、零 Root，仅在查询统计快照时按需读取。
      */
@@ -674,6 +727,38 @@ object BroadcastAndDozeHooks {
         XReflect.getObjectField(SystemState.deviceIdleController, field) as? Boolean
     }.getOrNull()
 
+    /**
+     * 当前 Doze 状态机的实时快照，供环境检查页显示「此刻为什么进不去深睡」。
+     *
+     * 编码格式见 [DozeLiveState.encode]；控制器未捕获或读取失败时返回空串，
+     * 界面按「未知」处理，不会把读取失败误报成「已进入深睡」。
+     */
+    fun describeLiveDoze(): String {
+        val controller = SystemState.deviceIdleController ?: return ""
+        return runCatching {
+            DozeLiveState(
+                state = XReflect.getIntField(controller, "mState"),
+                forced = controllerBoolean("mForceIdle") == true,
+                charging = controllerBoolean("mCharging") == true,
+                screenOn = controllerBoolean("mScreenOn") == true,
+                blockingConstraints = XReflect.getIntField(controller, "mNumBlockingConstraints"),
+                blockerNames = activeConstraintNames(controller),
+            ).encode()
+        }.onFailure { Logger.debug("Doze 实时状态读取失败 ${it.javaClass.simpleName}") }
+            .getOrDefault("")
+    }
+
+    /** 正在生效的约束名（active=true），最多取前 4 个，避免提示过长。 */
+    private fun activeConstraintNames(controller: Any): List<String> {
+        val map = XReflect.getObjectField(controller, "mConstraints") as? Map<*, *> ?: return emptyList()
+        return map.values.mapNotNull { tracker ->
+            if (tracker == null) return@mapNotNull null
+            val active = runCatching { XReflect.getObjectField(tracker, "active") as? Boolean }.getOrNull()
+            if (active != true) return@mapNotNull null
+            runCatching { XReflect.getObjectField(tracker, "name") as? String }.getOrNull()
+        }.filter { it.isNotBlank() }.distinct().take(4)
+    }
+
     private fun queryDozeEnabled(): Boolean {
         if (!PrefReader.systemPrefs.enableDoze) return false
         return runCatching {
@@ -721,10 +806,14 @@ object BroadcastAndDozeHooks {
         val listener = deepDozeAlarmListener
         deepDozeAlarmListener = null
         deepDozeAlarmToken = null
-        if (listener != null) {
+        val retryListener = deepDozeRetryListener
+        deepDozeRetryListener = null
+        if (listener != null || retryListener != null) {
             runCatching {
                 val ctx = screenReceiverContext ?: SystemState.systemContext
-                ctx?.getSystemService(AlarmManager::class.java)?.cancel(listener)
+                val am = ctx?.getSystemService(AlarmManager::class.java)
+                listener?.let { am?.cancel(it) }
+                retryListener?.let { am?.cancel(it) }
             }
         }
     }
@@ -742,10 +831,15 @@ object BroadcastAndDozeHooks {
      * 身份 step 推进到 IDLE，再补一次 force-idle 只登记强制标记（该路径不推进状态机，不会被拦截）。
      */
     private fun enterDeepDozeLocked(): Boolean {
+        val attemptWall = System.currentTimeMillis()
+        DozeDiagnostics.onAttempt(attemptWall)
         val (code, out) = execIdleShellCommand("force-idle", "deep")
-        if (code == 0) return true
+        if (code == 0) {
+            DozeDiagnostics.onSuccess(System.currentTimeMillis())
+            return true
+        }
         Logger.alwaysWarn("深度睡眠失败 $out")
-        logIdleConstraintsLocked()
+        val blockers = logIdleConstraintsLocked()
         var state = idleStateLocked()
         for (attempt in 1..4) {
             if (state == null || state == STATE_IDLE) break
@@ -761,14 +855,20 @@ object BroadcastAndDozeHooks {
             val (retryCode, retryOut) = execIdleShellCommand("force-idle", "deep")
             if (retryCode == 0) {
                 Logger.alwaysWarn("深度睡眠成功")
+                DozeDiagnostics.onSuccess(System.currentTimeMillis())
                 return true
             }
             Logger.alwaysWarn("深度睡眠强制标记补登失败 $retryOut")
         }
-        if (state == STATE_IDLE || state == STATE_IDLE_MAINTENANCE) return true
+        if (state == STATE_IDLE || state == STATE_IDLE_MAINTENANCE) {
+            DozeDiagnostics.onSuccess(System.currentTimeMillis())
+            return true
+        }
+        DozeDiagnostics.onFailure(System.currentTimeMillis(), deepDozeFailureText(out, state, blockers))
         // 深睡被 ROM 状态机拒绝（典型是 10 分钟内有时钟闹钟）：退化为浅睡兜底，稍后由重试闹钟再升级。
         val (lightCode, lightOut) = execIdleShellCommand("force-idle", "light")
         if (lightCode == 0) {
+            dozeLightFallbackActive = true
             Logger.alwaysWarn("浅度睡眠成功（深睡被系统拒绝）")
             return true
         }
@@ -776,10 +876,23 @@ object BroadcastAndDozeHooks {
         return false
     }
 
-    /** 打印当前阻塞约束，便于定位 ROM 侧是谁拦住了 force-idle。 */
-    private fun logIdleConstraintsLocked() {
-        val controller = SystemState.deviceIdleController ?: return
-        runCatching {
+    /**
+     * 把 ROM 的失败输出压成一行短原因，供环境检查页直接显示。
+     *
+     * dumpsys 输出通常形如 `Unable to go deep idle; stopped at INACTIVE`，
+     * 这里保留状态值、阻塞约束与 ROM 原文，去掉换行并截断，避免占满提示位。
+     */
+    private fun deepDozeFailureText(out: String, state: Int?, blockers: String): String {
+        val reason = out.trim().replace(Regex("[\\r\\n]+"), " ").take(110)
+        val stateText = if (state == null) "状态未知" else "停在 state=$state"
+        val head = if (reason.isEmpty()) stateText else "$stateText：$reason"
+        return if (blockers.isEmpty()) head else "$head｜约束：$blockers"
+    }
+
+    /** 记录当前阻塞约束并返回可读摘要，便于定位 ROM 侧是谁拦住了 force-idle。 */
+    private fun logIdleConstraintsLocked(): String {
+        val controller = SystemState.deviceIdleController ?: return ""
+        return runCatching {
             val blocking = XReflect.getIntField(controller, "mNumBlockingConstraints")
             val map = XReflect.getObjectField(controller, "mConstraints") as? Map<*, *>
             val detail = map?.values?.mapNotNull { tracker ->
@@ -791,7 +904,19 @@ object BroadcastAndDozeHooks {
                 "$name(active=$active,monitoring=$monitoring,minState=$minState)"
             }?.joinToString(" | ") ?: ""
             Logger.alwaysWarn("Doze约束: blocking=$blocking total=${map?.size ?: -1} [$detail]")
-        }.onFailure { Logger.debug("Doze约束读取失败 ${it.javaClass.simpleName}") }
+            // 只把正在生效的约束带进诊断，避免把全部约束名塞进一行提示。
+            val activeNames = map?.values?.mapNotNull { tracker ->
+                if (tracker == null) return@mapNotNull null
+                val active = runCatching { XReflect.getObjectField(tracker, "active") as? Boolean }.getOrNull()
+                if (active != true) null
+                else runCatching { XReflect.getObjectField(tracker, "name") as? String }.getOrNull()
+            }.orEmpty()
+            if (activeNames.isEmpty()) {
+                if (blocking > 0) "blocking=$blocking" else ""
+            } else {
+                "blocking=$blocking ${activeNames.joinToString("、")}"
+            }
+        }.onFailure { Logger.debug("Doze约束读取失败 ${it.javaClass.simpleName}") }.getOrDefault("")
     }
 
     /** 清除强制标记；残留的 mForceIdle 会让控制器立刻重新进入 INACTIVE。 */
@@ -799,6 +924,7 @@ object BroadcastAndDozeHooks {
         if (controllerBoolean("mForceIdle") != true) return true
         val (code, out) = execIdleShellCommand("unforce")
         if (code != 0) Logger.debug("退出深度睡眠未确认 $out")
+        if (code == 0) dozeLightFallbackActive = false
         return code == 0
     }
 
@@ -850,7 +976,21 @@ object BroadcastAndDozeHooks {
         if (!PrefReader.systemPrefs.enableDoze || hotReloading) releaseDeepDozeLocked("config")
     }
 
-    private fun scheduleDeepDoze(handler: Handler, screenOnOverride: Boolean? = null, chargingOverride: Boolean? = null) = withDozeLock {
+    /**
+     * 排期进入深睡。
+     *
+     * @param delayMillis 触发延迟；正常路径是 [DEEP_DOZE_ENTER_DELAY_MS]，补试路径用 [DozeRetryPolicy.RETRY_DELAY_MILLIS]
+     * @param isRetry 是否为补试调度；非补试（熄屏 / 停止充电）会重置本周期的补试标记
+     */
+    private fun scheduleDeepDoze(
+        handler: Handler,
+        screenOnOverride: Boolean? = null,
+        chargingOverride: Boolean? = null,
+        delayMillis: Long = DEEP_DOZE_ENTER_DELAY_MS,
+        isRetry: Boolean = false,
+    ) = withDozeLock {
+        if (!isRetry) dozeRetryUsed = false
+        deepDozeHandler = handler
         cancelDeepDozeAlarmLocked()
         val conditions = readDozeConditions(screenOnOverride, chargingOverride)
         Logger.alwaysWarn(
@@ -866,7 +1006,7 @@ object BroadcastAndDozeHooks {
                 ?: return@withDozeLock dozeLifecycle.cancel()
             deepDozeAlarmListener = listener
             deepDozeAlarmToken = token
-            val triggerAt = SystemClock.elapsedRealtime() + DEEP_DOZE_ENTER_DELAY_MS
+            val triggerAt = SystemClock.elapsedRealtime() + delayMillis
             val exact = runCatching {
                 am.setExact(
                     AlarmManager.ELAPSED_REALTIME_WAKEUP,
@@ -934,9 +1074,86 @@ object BroadcastAndDozeHooks {
                     }
                 }
             } else {
-                Logger.alwaysWarn("浅睡兜底生效，下次熄屏时再尝试进入深睡")
+                scheduleDozeRetryLocked()
             }
         }
+    }
+
+    /**
+     * 浅睡兜底后排一次深睡补试。
+     *
+     * 命中条件见 [DozeRetryPolicy]：仅在用户开启该开关、熄屏且未充电、本次熄屏尚未补试时排期。
+     * 补试本身仍走 [scheduleDeepDoze] 的完整条件检查，亮屏 / 开始充电会提前放弃。
+     */
+    private fun scheduleDozeRetryLocked() {
+        val handler = deepDozeHandler
+        val conditions = readDozeConditions()
+        val allow = DozeRetryPolicy.shouldSchedule(
+            optIn = PrefReader.systemPrefs.dozeRetryAfterAlarm,
+            dozeEnabled = PrefReader.systemPrefs.enableDoze,
+            screenOn = conditions.screenOn,
+            charging = conditions.charging,
+            deepEntered = false,
+            retriedThisCycle = dozeRetryUsed,
+        )
+        val ctx = screenReceiverContext ?: SystemState.systemContext
+        val am = ctx?.getSystemService(AlarmManager::class.java)
+        if (!allow || handler == null || am == null) {
+            Logger.alwaysWarn("浅睡兜底生效，下次熄屏时再尝试进入深睡")
+            return
+        }
+        dozeRetryUsed = true
+        val triggerAt = SystemClock.elapsedRealtime() + DozeRetryPolicy.RETRY_DELAY_MILLIS
+        val listener = AlarmManager.OnAlarmListener { runDozeRetry() }
+        deepDozeRetryListener = listener
+        val exact = runCatching {
+            am.setExact(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                triggerAt,
+                "XMillet.DozeRetry",
+                listener,
+                handler,
+            )
+            true
+        }.getOrDefault(false)
+        if (!exact) {
+            am.set(
+                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                triggerAt,
+                "XMillet.DozeRetry",
+                listener,
+                handler,
+            )
+        }
+        Logger.alwaysWarn(
+            "浅睡兜底生效，已排期 ${DozeRetryPolicy.RETRY_DELAY_MILLIS / 60_000} 分钟后补试深睡 exact=$exact"
+        )
+    }
+
+    /**
+     * 补试闹钟触发：先撤掉本模块设置的浅睡强制，再按正常路径重新调度深睡。
+     *
+     * 不直接 `force-idle deep` 的原因：浅睡阶段 `mForceIdle` 为 true，
+     * ROM 的 `stepIdleStateLocked` 会直接返回，必须先解除强制再重新调度。
+     */
+    private fun runDozeRetry() = withDozeLock {
+        deepDozeRetryListener = null
+        Logger.alwaysWarn("DeepDoze 补试闹钟触发")
+        if (dozeLightFallbackActive) {
+            val (code, out) = execIdleShellCommand("unforce")
+            if (code == 0) {
+                dozeLightFallbackActive = false
+                Logger.alwaysWarn("补试前解除浅睡强制")
+            } else {
+                Logger.alwaysWarn("补试前解除浅睡强制失败 $out")
+            }
+        }
+        val handler = deepDozeHandler
+        if (handler == null) {
+            Logger.alwaysWarn("补试跳过：Handler 已丢失")
+            return@withDozeLock
+        }
+        scheduleDeepDoze(handler, isRetry = true)
     }
 
     private fun initIdleShell(controller: Any) {

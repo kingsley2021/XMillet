@@ -148,6 +148,7 @@ object SystemHooks {
         BroadcastAndDozeHooks.buildS34DeviceIdleUpcomingAlarmHook(),
         BroadcastAndDozeHooks.buildS38DeviceIdleBecomeActiveHook(),
         BroadcastAndDozeHooks.buildS39DeviceIdleStepStateHook(),
+        BroadcastAndDozeHooks.buildS40DeviceIdleEventHook(),
         FreezeGateHooks.buildS2GreezeLifecycleReadyHook(),
         FreezeGateHooks.buildWakeLockHook(),
         FreezeGateHooks.buildSystemProcessManagerKillHook()

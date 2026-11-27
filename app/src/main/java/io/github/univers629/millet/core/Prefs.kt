@@ -38,6 +38,13 @@ object PrefsKeys {
     const val ENABLE_DOZE = "enableDoze"
     const val SKIP_STATE_CHECK = "skipStateCheck"
     const val DISABLE_MOTION_LISTENER = "disableMotionListener"
+
+    /**
+     * 深睡被系统闹钟窗口拦住后，延迟约 11 分钟补试一次深睡。
+     *
+     * 默认关闭：补试会在闹钟窗口结束后再执行一次 `force-idle deep`，属于新增后台行为。
+     */
+    const val DOZE_RETRY_AFTER_ALARM = "dozeRetryAfterAlarm"
     const val FREEZE_STATS = "freezeStats"
     const val FREEZE_DUAL_APP = "freezeDualApp"
 
@@ -78,6 +85,7 @@ object PrefsKeys {
         ENABLE_DOZE,
         SKIP_STATE_CHECK,
         DISABLE_MOTION_LISTENER,
+        DOZE_RETRY_AFTER_ALARM,
         FREEZE_STATS,
         FREEZE_DUAL_APP,
         WHITE_APP_SET,
@@ -111,6 +119,7 @@ object PrefsDefaults {
     const val ENABLE_DOZE = true
     const val SKIP_STATE_CHECK = true
     const val DISABLE_MOTION_LISTENER = true
+    const val DOZE_RETRY_AFTER_ALARM = false
     const val FREEZE_STATS = true
     const val FREEZE_DUAL_APP = true
 
@@ -145,6 +154,7 @@ object PrefsDefaults {
         PrefsKeys.ENABLE_DOZE -> ENABLE_DOZE
         PrefsKeys.SKIP_STATE_CHECK -> SKIP_STATE_CHECK
         PrefsKeys.DISABLE_MOTION_LISTENER -> DISABLE_MOTION_LISTENER
+        PrefsKeys.DOZE_RETRY_AFTER_ALARM -> DOZE_RETRY_AFTER_ALARM
         PrefsKeys.FREEZE_STATS -> FREEZE_STATS
         PrefsKeys.FREEZE_DUAL_APP -> FREEZE_DUAL_APP
         else -> false
@@ -185,7 +195,8 @@ enum class PrefGroup(val keys: Set<String>) {
             PrefsKeys.DOZE_LOG,
             PrefsKeys.ENABLE_DOZE,
             PrefsKeys.SKIP_STATE_CHECK,
-            PrefsKeys.DISABLE_MOTION_LISTENER
+            PrefsKeys.DISABLE_MOTION_LISTENER,
+            PrefsKeys.DOZE_RETRY_AFTER_ALARM
         )
     ),
     APP_SETS(
@@ -231,11 +242,12 @@ data class PrefsSnapshot(
     val freezeStats: Boolean = PrefsDefaults.FREEZE_STATS,
     val freezeDualApp: Boolean = PrefsDefaults.FREEZE_DUAL_APP,
 
-    // 4 个 Doze 布尔开关
+    // 5 个 Doze 布尔开关
     val dozeLog: Boolean = PrefsDefaults.DOZE_LOG,
     val enableDoze: Boolean = PrefsDefaults.ENABLE_DOZE,
     val skipStateCheck: Boolean = PrefsDefaults.SKIP_STATE_CHECK,
     val disableMotionListener: Boolean = PrefsDefaults.DISABLE_MOTION_LISTENER,
+    val dozeRetryAfterAlarm: Boolean = PrefsDefaults.DOZE_RETRY_AFTER_ALARM,
 
     // 7 个应用策略集合；无后缀条目仅属于主用户
     val whiteAppSet: Set<String> = PrefsDefaults.WHITE_APP_SET,

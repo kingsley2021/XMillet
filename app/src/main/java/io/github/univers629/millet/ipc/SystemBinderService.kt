@@ -7,6 +7,7 @@ import android.os.IBinder
 import android.os.Parcel
 import android.os.Process
 import android.os.RemoteException
+import io.github.univers629.millet.core.DozeDiagnostics
 import io.github.univers629.millet.core.FreezeStatsCodec
 import io.github.univers629.millet.core.HookDecisions
 import io.github.univers629.millet.core.HookInstallRegistry
@@ -146,6 +147,10 @@ class SystemBinderService : Binder() {
                     reply?.writeString(buildHookCoverage().encode())
                     // 再追加：powerkeeper 用官方接口读到的云名单；未上报时写空串
                     reply?.writeString(powerKeeperCloudLists)
+                    // 再追加：最近一次主动进入深睡的结果；旧版 App 读到云名单即止
+                    reply?.writeString(DozeDiagnostics.encode())
+                    // 再追加：Doze 状态机的实时快照（状态 + 生效中的阻塞约束）
+                    reply?.writeString(BroadcastAndDozeHooks.describeLiveDoze())
                     true
                 }
 
@@ -326,11 +331,14 @@ class SystemBinderService : Binder() {
     private fun buildHookCoverage(): HookCoverage {
         val sysWire = HookInstallRegistry.decodeWireFormat(HookInstallRegistry.toWireFormat())
         val pkWire = HookInstallRegistry.decodeWireFormat(powerKeeperHooksReport)
+        val sysInstalled = HookInstallRegistry.snapshot()
+            .filter { it.state == HookInstallRegistry.State.INSTALLED }
+            .map { it.id }.toSet()
         val caps = HookCoverage.mergeCapabilities(
-            RomCapabilities.capabilityMap(SystemState.systemContext?.classLoader) +
-                ("greeze_registered" to HookInstallRegistry.snapshot()
-                    .filter { it.state == HookInstallRegistry.State.INSTALLED }
-                    .map { it.id }.toSet().containsAll(setOf("S2_Gate", "S6"))),
+            RomCapabilities.capabilityMap(SystemState.systemContext?.classLoader) + mapOf(
+                "greeze_registered" to sysInstalled.containsAll(setOf("S2_Gate", "S6")),
+                HookCoverage.CAP_DOZE_OBS to sysInstalled.containsAll(RomCapabilities.DOZE_OBSERVATION_HOOKS),
+            ),
             HookCoverage.parseCapabilities(powerKeeperCapsReport)
         )
         return HookCoverage(sys = sysWire, pk = pkWire, capabilities = caps)

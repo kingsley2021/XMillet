@@ -17,6 +17,8 @@ import io.github.univers629.millet.core.FreezeStatsSnapshotData
 import io.github.univers629.millet.core.HookInstallRegistry
 import io.github.univers629.millet.core.Logger
 import io.github.univers629.millet.core.PrefReader
+import io.github.univers629.millet.core.DozeDiagnostics
+import io.github.univers629.millet.core.DozeLiveState
 import io.github.univers629.millet.core.RomCapabilities
 import io.github.univers629.millet.core.StatsWindow
 import io.github.univers629.millet.powerkeeper.PowerKeeperCloudLists
@@ -52,6 +54,15 @@ object PowerKeeperBinderClient {
          * 此时界面应退回模块自读数据库的兜底路径。
          */
         val cloudLists: CloudListCodec.CloudLists? = null,
+        /**
+         * 最近一次主动进入深睡的结果；模块未上报时为 null，
+         * 此时界面不显示失败提示（而不是显示「成功」）。
+         */
+        val dozeDiagnostics: DozeDiagnostics.Snapshot? = null,
+        /**
+         * Doze 状态机此刻的快照（状态 + 阻塞约束）；模块未上报时为 null。
+         */
+        val liveDoze: DozeLiveState? = null,
     ) {
         /** 已安装 Hook 数；模块未上报时为 -1（界面须显示「未知」而不是 0） */
         val installedHooks: Int get() = if (hookCoverage.hasData) hookCoverage.installedCount else -1
@@ -718,11 +729,35 @@ object PowerKeeperBinderClient {
                 null
             }
             val cloudLists = CloudListCodec.decode(cloudRaw)
+            // 最后一段是最近一次深睡尝试的结果；旧模块没有这一段。
+            val dozeRaw = if (reply.dataAvail() >= 4) {
+                try {
+                    reply.readString()
+                } catch (_: Throwable) {
+                    null
+                }
+            } else {
+                null
+            }
+            val dozeDiagnostics = DozeDiagnostics.decode(dozeRaw)
+            // 再往后是 Doze 状态机的实时快照；旧模块没有这一段。
+            val liveDozeRaw = if (reply.dataAvail() >= 4) {
+                try {
+                    reply.readString()
+                } catch (_: Throwable) {
+                    null
+                }
+            } else {
+                null
+            }
+            val liveDoze = DozeLiveState.decode(liveDozeRaw)
             Logger.alwaysInfo(
                 "运行状态: binderAlive=true, greezeReady=$greezeReady, aurogonReady=$aurogonReady, " +
                     "dozeReady=$dozeReady, pkConnected=$pkConnected, frozen=${frozenUids.size}, " +
                     "frameworkApiVersion=$frameworkApiVersion, hooks=${hookCoverage.ratioOrNull() ?: "未知"}, " +
-                    "cloud=${cloudLists?.let { "${it.dozeWhiteList.size}/${it.frozenNewWhiteList.size}/${it.launchRestrict.size}" } ?: "未知"}"
+                    "cloud=${cloudLists?.let { "${it.dozeWhiteList.size}/${it.frozenNewWhiteList.size}/${it.launchRestrict.size}" } ?: "未知"}, " +
+                    "dozeDiag=${dozeDiagnostics?.let { if (it.lastAttemptFailed) "fail@${it.failureMillis}" else "ok@${it.successMillis}" } ?: "未知"}, " +
+                    "dozeLive=${liveDoze?.let { "${it.stateName}/blocking=${it.blockingConstraints}" } ?: "未知"}"
             )
             lastStatusFailure = null
             RuntimeStatusSnapshot(
@@ -735,6 +770,8 @@ object PowerKeeperBinderClient {
                 frameworkApiVersion = frameworkApiVersion,
                 hookCoverage = hookCoverage,
                 cloudLists = cloudLists,
+                dozeDiagnostics = dozeDiagnostics,
+                liveDoze = liveDoze,
             )
         } catch (t: Throwable) {
             // 同一条失败只记一次，避免 3 秒轮询刷屏

@@ -219,7 +219,8 @@ object PrefReader {
                 "blockCloudDoze=${snapshot.blockCloudDozeWhitelist}, " +
                 "blockCloudFrozen=${snapshot.blockCloudFrozenWhitelist}, " +
                 "freezeStats=${snapshot.freezeStats}, freezeDualApp=${snapshot.freezeDualApp}, " +
-                "enableDoze=${snapshot.enableDoze}, whiteAppSet=${snapshot.whiteAppSet.size}, " +
+                "enableDoze=${snapshot.enableDoze}, dozeRetry=${snapshot.dozeRetryAfterAlarm}, " +
+                "whiteAppSet=${snapshot.whiteAppSet.size}, " +
                 "messageAppSet=${snapshot.messageAppSet.size}, ignoreNetworkWake=${snapshot.ignoreNetworkWakeSet.size}"
         )
     }
@@ -284,7 +285,8 @@ object PrefReader {
                 dozeLog = getBooleanOrDefault(raw, PrefsKeys.DOZE_LOG),
                 enableDoze = getBooleanOrDefault(raw, PrefsKeys.ENABLE_DOZE),
                 skipStateCheck = getBooleanOrDefault(raw, PrefsKeys.SKIP_STATE_CHECK),
-                disableMotionListener = getBooleanOrDefault(raw, PrefsKeys.DISABLE_MOTION_LISTENER)
+                disableMotionListener = getBooleanOrDefault(raw, PrefsKeys.DISABLE_MOTION_LISTENER),
+                dozeRetryAfterAlarm = getBooleanOrDefault(raw, PrefsKeys.DOZE_RETRY_AFTER_ALARM)
             )
 
             PrefGroup.APP_SETS -> PrefsSchema.sanitizeSnapshot(
@@ -437,6 +439,7 @@ object PrefReader {
         enableDoze = readUiBoolean(prefs, PrefsKeys.ENABLE_DOZE),
         skipStateCheck = readUiBoolean(prefs, PrefsKeys.SKIP_STATE_CHECK),
         disableMotionListener = readUiBoolean(prefs, PrefsKeys.DISABLE_MOTION_LISTENER),
+        dozeRetryAfterAlarm = readUiBoolean(prefs, PrefsKeys.DOZE_RETRY_AFTER_ALARM),
         whiteAppSet = readUiStringSet(prefs, PrefsKeys.WHITE_APP_SET),
         messageAppSet = readUiStringSet(prefs, PrefsKeys.MESSAGE_APP_SET),
         forceFreezeSet = readUiStringSet(prefs, PrefsKeys.FORCE_FREEZE_SET),

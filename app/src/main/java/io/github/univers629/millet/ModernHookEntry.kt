@@ -223,7 +223,8 @@ class ModernHookEntry : XposedModule() {
                     "blockCloudDoze=${prefs.blockCloudDozeWhitelist}, " +
                     "blockCloudFrozen=${prefs.blockCloudFrozenWhitelist}, " +
                     "freezeStats=${prefs.freezeStats}, " +
-                    "enableDoze=${prefs.enableDoze}, messageAppSet=${prefs.messageAppSet.size}, " +
+                    "enableDoze=${prefs.enableDoze}, dozeRetry=${prefs.dozeRetryAfterAlarm}, " +
+                    "messageAppSet=${prefs.messageAppSet.size}, " +
                     "whiteAppSet=${prefs.whiteAppSet.size}, ignoreNetworkWake=${prefs.ignoreNetworkWakeSet.size}"
             )
         } catch (t: Throwable) {
