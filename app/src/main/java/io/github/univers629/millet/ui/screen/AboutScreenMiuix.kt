@@ -91,12 +91,12 @@ import top.yukonga.miuix.kmp.blur.BlurDefaults
 import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.blur.textureBlur
 import top.yukonga.miuix.kmp.icon.MiuixIcons
+import io.github.univers629.millet.ui.component.XMilletIcons
 import top.yukonga.miuix.kmp.icon.glass.Document
 import top.yukonga.miuix.kmp.icon.glass.HtmlViewer
-import top.yukonga.miuix.kmp.icon.glass.MemoryFunction
 import top.yukonga.miuix.kmp.icon.glass.MyDevice
-import top.yukonga.miuix.kmp.icon.glass.Phone
 import top.yukonga.miuix.kmp.icon.glass.SecurityStatus
+import top.yukonga.miuix.kmp.icon.glass.SuperXiaoai
 import top.yukonga.miuix.kmp.icon.glass.Back
 import top.yukonga.miuix.kmp.preference.ArrowPreference
 import top.yukonga.miuix.kmp.theme.LocalDismissState
@@ -433,7 +433,7 @@ fun AboutScreenMiuix(
                         BasicComponent(
                             startAction = {
                                 Icon(
-                                    imageVector = MiuixIcons.Glass.Phone,
+                                    imageVector = MiuixIcons.Glass.MyDevice,
                                     contentDescription = null,
                                     modifier = Modifier
                                         .padding(end = 8.dp)
@@ -447,7 +447,7 @@ fun AboutScreenMiuix(
                         BasicComponent(
                             startAction = {
                                 Icon(
-                                    imageVector = MiuixIcons.Glass.MyDevice,
+                                    imageVector = XMilletIcons.AndroidHead,
                                     contentDescription = null,
                                     modifier = Modifier
                                         .padding(end = 8.dp)
@@ -461,7 +461,7 @@ fun AboutScreenMiuix(
                         BasicComponent(
                             startAction = {
                                 Icon(
-                                    imageVector = MiuixIcons.Glass.MemoryFunction,
+                                    imageVector = MiuixIcons.Glass.SuperXiaoai,
                                     contentDescription = null,
                                     modifier = Modifier
                                         .padding(end = 8.dp)

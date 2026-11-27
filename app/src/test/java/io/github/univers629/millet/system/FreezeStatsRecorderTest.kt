@@ -970,4 +970,44 @@ class FreezeStatsRecorderTest {
         assertEquals(0, engine.backfillBootDozeIntervals(intervals, nowWallMs = nowMs, nowElapsedMs = elapsedMs))
         assertEquals(0, engine.buildSnapshot(StatsWindow.TODAY).dozeSummary.sessionCount)
     }
+
+    @Test
+    fun `doze session exit resolves and persists package names for never-frozen top uids`() {
+        val storage = File(tempFolder.root, "doze-top-pkg.v1")
+        var nowMs = millisAt(2026, 11, 27, 3, 0)
+        var elapsedMs = 200_000L
+        var cpuMap = mapOf(10335 to 100L)
+        val engine = FreezeStatsEngine(
+            storageFile = storage,
+            zoneId = testZone,
+            clock = { nowMs },
+            elapsedClock = { elapsedMs },
+            enabledProvider = { true },
+            packageResolver = { uid -> if (uid == 10335) "com.ss.android.ugc.trill" else null },
+        )
+
+        engine.onDozeStateObserved(
+            state = 5,
+            wallMs = nowMs,
+            elapsedMs = elapsedMs,
+            batteryPct = 80,
+            isPlugged = false,
+            cpuSnapshotProvider = { io.github.univers629.millet.core.CpuStatSource.PROC_UID_STAT to cpuMap },
+        )
+        nowMs += 90_000L
+        elapsedMs += 90_000L
+        cpuMap = mapOf(10335 to 2_100L)
+        engine.onDozeStateObserved(
+            state = 0,
+            wallMs = nowMs,
+            elapsedMs = elapsedMs,
+            batteryPct = 80,
+            isPlugged = false,
+            cpuSnapshotProvider = { io.github.univers629.millet.core.CpuStatSource.PROC_UID_STAT to cpuMap },
+        )
+
+        assertTrue(storage.exists())
+        val persisted = storage.readText()
+        assertTrue(persisted.contains("10335,com.ss.android.ugc.trill,2000,1"))
+    }
 }

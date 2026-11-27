@@ -82,7 +82,7 @@ import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import io.github.univers629.millet.ui.component.XMilletIcons
 import top.yukonga.miuix.kmp.icon.glass.Filter
-import top.yukonga.miuix.kmp.icon.glass.Phone
+import top.yukonga.miuix.kmp.icon.glass.MyDevice
 import top.yukonga.miuix.kmp.icon.glass.Processor
 import top.yukonga.miuix.kmp.icon.glass.Tags
 import top.yukonga.miuix.kmp.icon.basic.ArrowRight
@@ -731,7 +731,7 @@ private fun SystemInfoCard(
                 content = kernelVer,
             )
             InfoText(
-                icon = MiuixIcons.Glass.Phone,
+                icon = MiuixIcons.Glass.MyDevice,
                 title = "设备型号",
                 content = deviceDesc,
                 bottomPadding = 0.dp,

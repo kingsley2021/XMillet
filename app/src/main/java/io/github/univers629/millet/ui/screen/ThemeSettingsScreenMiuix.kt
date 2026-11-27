@@ -88,7 +88,7 @@ import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.glass.ListView
 import top.yukonga.miuix.kmp.icon.glass.Hd
 import top.yukonga.miuix.kmp.icon.glass.ChevronBackward
-import top.yukonga.miuix.kmp.icon.glass.BottomSplitScreenOutline
+import top.yukonga.miuix.kmp.icon.glass.BottomSplitScreenFill
 import top.yukonga.miuix.kmp.icon.glass.Album
 import top.yukonga.miuix.kmp.icon.glass.DigitalStatistics
 import top.yukonga.miuix.kmp.icon.glass.Reset
@@ -205,7 +205,7 @@ fun ThemeSettingsScreenMiuix(
                         GlassDropdownPreference(
                             startAction = {
                                 Icon(
-                                    imageVector = MiuixIcons.Glass.BottomSplitScreenOutline,
+                                    imageVector = MiuixIcons.Glass.BottomSplitScreenFill,
                                     contentDescription = null,
                                     modifier = Modifier
                                         .padding(end = 8.dp)

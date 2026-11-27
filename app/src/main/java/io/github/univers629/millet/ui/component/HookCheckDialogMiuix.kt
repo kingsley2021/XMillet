@@ -594,13 +594,11 @@ fun generateHookDiagnostics(
                 dozeLevel != HookDiagnosticLevel.PASSED ->
                     "点「重新检测」；仍待捕获时用「热重载」重装 system_server 钩子，无需重启"
                 dozeFailureHint != null ->
-                    "最近一次深睡失败：$dozeFailureHint。10 分钟内有系统闹钟、正在充电或官方省电策略未放行都会拦下深睡，" +
-                        "排除后点「重新检测」；反复被闹钟窗口拦下时可在「Doze 深度睡眠策略」开启「闹钟后补试深睡」。"
+                    "最近一次深睡失败：$dozeFailureHint。充电中、亮屏、紧急通话或 Doze 钩子未生效都会拦下深睡，排除后点「重新检测」。"
                 liveDoze != null && liveDoze.blockingConstraints > 0 ->
                     "当前有 ${liveDoze.blockingConstraints} 项约束在拦深睡" +
                         if (liveDoze.blockerNames.isEmpty()) "，可到「Doze 深度睡眠策略」检查开关。"
-                        else "（${liveDoze.blockerNames.joinToString("、")}），熄屏后仍被拦住时优先排查这几项，" +
-                            "或在「Doze 深度睡眠策略」开启「闹钟后补试深睡」。"
+                        else "（${liveDoze.blockerNames.joinToString("、")}），熄屏后仍被拦住时优先排查这几项并检查 Doze 钩子状态。"
                 else -> null
             },
             suggestionWhenPassed = dozeFailureHint != null || (liveDoze?.blockingConstraints ?: 0) > 0,

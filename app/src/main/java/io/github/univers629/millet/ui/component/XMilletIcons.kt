@@ -170,4 +170,55 @@ object XMilletIcons {
             }
         }.build()
     }
+
+    /**
+     * 安卓小人头轮廓图标：半圆头部 + 30° 双触角 + 双圆眼，1.5dp 圆头描边。
+     * 主体落在 24dp 视口的 [3.8..20.2, 6.4..18.0] 区间，与 Miuix Glass Regular 图标粗细与留白一致。
+     */
+    val AndroidHead: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "AndroidHead",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f,
+        ).apply {
+            path(
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 1.5f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                // 半圆头轮廓与底边：圆心 (12, 17.2)，半径 8.2
+                moveTo(3.8f, 17.2f)
+                arcTo(
+                    horizontalEllipseRadius = 8.2f,
+                    verticalEllipseRadius = 8.2f,
+                    theta = 0f,
+                    isMoreThanHalf = false,
+                    isPositiveArc = true,
+                    x1 = 20.2f,
+                    y1 = 17.2f,
+                )
+                close()
+                // 左、右触角（相对顶垂线 ±30°）
+                moveTo(7.9f, 10.1f)
+                lineTo(6.2f, 7.15f)
+                moveTo(16.1f, 10.1f)
+                lineTo(17.8f, 7.15f)
+            }
+            path(fill = SolidColor(Color.Black)) {
+                // 左眼 (8.8, 13.8)，半径 0.95
+                moveTo(9.75f, 13.8f)
+                arcTo(0.95f, 0.95f, 0f, true, true, 7.85f, 13.8f)
+                arcTo(0.95f, 0.95f, 0f, true, true, 9.75f, 13.8f)
+                close()
+                // 右眼 (15.2, 13.8)，半径 0.95
+                moveTo(16.15f, 13.8f)
+                arcTo(0.95f, 0.95f, 0f, true, true, 14.25f, 13.8f)
+                arcTo(0.95f, 0.95f, 0f, true, true, 16.15f, 13.8f)
+                close()
+            }
+        }.build()
+    }
 }

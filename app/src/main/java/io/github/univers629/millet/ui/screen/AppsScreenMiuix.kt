@@ -74,7 +74,7 @@ import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.glass.Back
 import top.yukonga.miuix.kmp.icon.glass.Cloud
-import top.yukonga.miuix.kmp.icon.glass.Layers
+import top.yukonga.miuix.kmp.icon.glass.ListView
 import top.yukonga.miuix.kmp.icon.basic.ArrowRight
 import top.yukonga.miuix.kmp.icon.glass.MoreCircle
 import top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme
@@ -593,7 +593,7 @@ private fun PolicyHubCards(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         PolicyEntryCard(
-            icon = MiuixIcons.Glass.Layers,
+            icon = MiuixIcons.Glass.ListView,
             title = "策略模板",
             subtitle = templateSubtitle,
             onClick = onOpenTemplates,

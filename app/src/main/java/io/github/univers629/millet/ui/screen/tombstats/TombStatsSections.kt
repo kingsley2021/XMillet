@@ -9,9 +9,10 @@ import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.Spring
-import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.SpringSpec
@@ -50,6 +51,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,6 +71,8 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
@@ -89,6 +93,7 @@ import io.github.univers629.millet.ui.component.WarningCard
 import io.github.univers629.millet.ui.component.WarningLevel
 import io.github.univers629.millet.ui.model.TombSection
 import io.github.univers629.millet.ui.model.AppFreezeStats
+import io.github.univers629.millet.ui.model.DozeSessionUiModel
 import io.github.univers629.millet.ui.model.DozeSummaryUiModel
 import io.github.univers629.millet.ui.model.FreezeStatsSnapshot
 import io.github.univers629.millet.ui.model.RankMode
@@ -97,6 +102,9 @@ import io.github.univers629.millet.ui.model.allSessionsBackfilled
 import io.github.univers629.millet.ui.model.originLabel
 import io.github.univers629.millet.ui.model.summaryLabel
 import io.github.univers629.millet.ui.theme.isInDarkTheme
+import io.github.univers629.millet.ui.util.AppIconCache
+import io.github.univers629.millet.ui.util.CardClickLock
+import io.github.univers629.millet.ui.util.LocalCardClickLock
 import io.github.univers629.millet.ui.util.PopupBackdropHolder
 import java.text.SimpleDateFormat
 import java.util.Date
@@ -471,7 +479,6 @@ private fun DozeAttributionCard(
     apps: List<AppFreezeStats>,
     onOpenDetail: (AppFreezeStats) -> Unit,
 ) {
-    var showSessions by rememberSaveable { mutableStateOf(false) }
     val appsByUid = remember(apps) { apps.associateBy { it.uid } }
 
     Card(
@@ -638,69 +645,103 @@ private fun DozeAttributionCard(
             }
 
             if (summary.recentSessions.isNotEmpty()) {
-                // 与排行「查看全部 n 个应用」行同一套样式：不要底色、不要按压层，
-                // 只有居中的标题色文字 + 灰色 chevron，展开态靠 chevron 旋转表达。
-                val sessionArrowRotation by animateFloatAsState(
-                    targetValue = if (showSessions) 90f else 0f,
-                    animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
-                    label = "dozeSessionArrow",
-                )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(role = Role.Button) { showSessions = !showSessions }
-                        .padding(vertical = 12.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
+                DozeRecentSessionsSection(summary.recentSessions)
+            }
+        }
+    }
+}
+
+/**
+ * 深睡归因「最近待机分段」折叠区。
+ *
+ * 与设置页 [io.github.univers629.millet.ui.component.FoldablePreferenceSection] 保持同一套展开模型：
+ * 1. 独立子组合收敛展开态与箭头旋转，避免点击与动画帧触发外层指标卡和 Top 应用图标重组；
+ * 2. 折叠容器不设父级 `spacedBy`，将顶部间距放入 [AnimatedVisibility] 内部随高度平滑插值，
+ *    消除首尾帧跳变；
+ * 3. 使用与折叠卡片一致的无回弹 spring + 淡入淡出，并接入 [LocalCardClickLock] 防止动画中途连点抖动。
+ */
+@Composable
+private fun DozeRecentSessionsSection(sessions: List<DozeSessionUiModel>) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val clickLock = LocalCardClickLock.current
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (expanded) 90f else 0f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
+        label = "dozeSessionArrow",
+    )
+    val rows = remember(sessions) {
+        sessions.take(6).map { s ->
+            "${formatClock(s.startMillis)}–${formatClock(s.endMillis)} · ${formatDuration(s.durationMillis)}" to s.summaryLabel()
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    role = Role.Button,
                 ) {
-                    Text(
-                        text = if (showSessions) "收起最近待机分段" else "最近待机分段 (${summary.recentSessions.size})",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = colorScheme.primary,
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Icon(
-                        imageVector = MiuixIcons.Glass.ChevronForward,
-                        contentDescription = if (showSessions) "收起最近待机分段" else "展开最近待机分段",
-                        tint = colorScheme.onSurfaceVariantSummary,
-                        modifier = Modifier
-                            .size(16.dp)
-                            .graphicsLayer { rotationZ = sessionArrowRotation },
-                    )
+                    if (clickLock.tryAcquire(CardClickLock.ExpandWindowMillis)) {
+                        expanded = !expanded
+                    }
                 }
-                // 高度伸缩同样走 spring（与折叠卡片一致），展开与收起都不再出现一帧跳变。
-                AnimatedVisibility(
-                    visible = showSessions,
-                    enter = expandVertically(
-                        animationSpec = spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMediumLow, IntSize.VisibilityThreshold),
-                        expandFrom = Alignment.Top,
-                    ),
-                    exit = shrinkVertically(
-                        animationSpec = spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMediumLow, IntSize.VisibilityThreshold),
-                        shrinkTowards = Alignment.Top,
-                    ),
-                ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        summary.recentSessions.take(6).forEach { s ->
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                Text(
-                                    text = "${formatClock(s.startMillis)}–${formatClock(s.endMillis)} · ${formatDuration(s.durationMillis)}",
-                                    fontSize = 12.sp,
-                                    color = colorScheme.onSurface,
-                                    modifier = Modifier.weight(1f),
-                                )
-                                Text(
-                                    text = s.summaryLabel(),
-                                    fontSize = 12.sp,
-                                    color = colorScheme.onSurfaceVariantSummary,
-                                )
-                            }
-                        }
+                .padding(vertical = 10.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = "最近待机时段 (${sessions.size})",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                color = colorScheme.primary,
+            )
+            Spacer(Modifier.width(6.dp))
+            Icon(
+                imageVector = MiuixIcons.Glass.ChevronForward,
+                contentDescription = "最近待机时段",
+                tint = colorScheme.onSurfaceVariantSummary,
+                modifier = Modifier
+                    .size(16.dp)
+                    .graphicsLayer { rotationZ = arrowRotation },
+            )
+        }
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(
+                animationSpec = spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMediumLow, IntSize.VisibilityThreshold),
+                expandFrom = Alignment.Top,
+            ) + fadeIn(spring(stiffness = Spring.StiffnessMediumLow)),
+            exit = shrinkVertically(
+                animationSpec = spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMedium, IntSize.VisibilityThreshold),
+                shrinkTowards = Alignment.Top,
+            ) + fadeOut(spring(stiffness = Spring.StiffnessMedium)),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                rows.forEach { (timeRange, summaryText) ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = timeRange,
+                            fontSize = 12.sp,
+                            color = colorScheme.onSurface,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text(
+                            text = summaryText,
+                            fontSize = 12.sp,
+                            color = colorScheme.onSurfaceVariantSummary,
+                        )
                     }
                 }
             }
@@ -970,6 +1011,10 @@ private fun MiniMetric(
     }
 }
 
+private const val RANK_HEAD_COUNT = 10
+private const val RANK_ICON_PREWARM_LIMIT = 24
+private val RankModeLabels: List<String> = RankMode.entries.map { it.label }
+
 @Composable
 private fun AppRankSection(
     apps: List<AppFreezeStats>,
@@ -977,7 +1022,6 @@ private fun AppRankSection(
     onModeIndexChange: (Int) -> Unit,
     onOpenDetail: (AppFreezeStats) -> Unit,
 ) {
-    var expanded by rememberSaveable { mutableStateOf(false) }
     var searchVisible by rememberSaveable { mutableStateOf(false) }
     var searchQuery by rememberSaveable { mutableStateOf("") }
     var hideSystemApps by rememberSaveable { mutableStateOf(false) }
@@ -1026,7 +1070,12 @@ private fun AppRankSection(
     val maxValue = remember(sorted, mode) {
         sorted.maxOfOrNull { rankValue(it, mode) }?.coerceAtLeast(1f) ?: 1f
     }
-    val shown = if (expanded || activeQuery.isNotBlank()) filtered else filtered.take(10)
+    val head = remember(filtered, activeQuery) {
+        if (activeQuery.isNotBlank()) filtered else filtered.take(RANK_HEAD_COUNT)
+    }
+    val tail = remember(filtered, activeQuery) {
+        if (activeQuery.isNotBlank() || filtered.size <= RANK_HEAD_COUNT) emptyList() else filtered.drop(RANK_HEAD_COUNT)
+    }
     // 排行进度条整段只播一次生长动画：700ms 后新进入组合的行直接显示满值，
     // 避免滚动时每行都重播 550ms 补间。
     var animateBars by remember { mutableStateOf(true) }
@@ -1084,7 +1133,7 @@ private fun AppRankSection(
         Spacer(Modifier.height(RankSearchRowSpacing))
 
         RankModeTabRow(
-            tabs = RankMode.entries.map { it.label },
+            tabs = RankModeLabels,
             selectedIndex = modeIndex,
             onSelect = onModeIndexChange,
             modifier = Modifier.padding(horizontal = 12.dp),
@@ -1103,10 +1152,9 @@ private fun AppRankSection(
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 12.dp)
-                .animateContentSize(RankSearchSizeSpec),
+                .padding(horizontal = 12.dp),
         ) {
-            if (shown.isEmpty()) {
+            if (head.isEmpty()) {
                 if (activeQuery.isNotBlank()) {
                     BasicComponent(
                         title = "未找到匹配的应用",
@@ -1117,47 +1165,122 @@ private fun AppRankSection(
                     BasicComponent(title = "暂无数据", summary = "本时段内没有符合条件的应用")
                 }
             }
-            shown.forEachIndexed { i, app ->
-                RankRow(
-                    rank = i + 1,
-                    app = app,
-                    mode = mode,
-                    fraction = rankValue(app, mode) / maxValue,
-                    animateOnEnter = animateBars,
-                    onClick = { onOpenDetail(app) },
-                )
-            }
-            if (filtered.size > 10 && activeQuery.isBlank()) {
-                val moreArrowRotation by animateFloatAsState(
-                    targetValue = if (expanded) 90f else 0f,
-                    animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
-                    label = "rankMoreArrow",
-                )
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { expanded = !expanded }
-                        .padding(vertical = 12.dp),
-                    horizontalArrangement = Arrangement.Center,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        text = if (expanded) "收起" else "查看全部 ${filtered.size} 个应用",
-                        fontSize = 13.sp,
-                        fontWeight = FontWeight.Medium,
-                        color = colorScheme.primary,
-                    )
-                    Spacer(Modifier.width(6.dp))
-                    Icon(
-                        imageVector = MiuixIcons.Glass.ChevronForward,
-                        contentDescription = if (expanded) "收起" else "查看全部",
-                        tint = colorScheme.onSurfaceVariantSummary,
-                        modifier = Modifier
-                            .size(16.dp)
-                            .graphicsLayer { rotationZ = moreArrowRotation },
+            head.forEachIndexed { i, app ->
+                key(app.uid) {
+                    RankRow(
+                        rank = i + 1,
+                        app = app,
+                        mode = mode,
+                        fraction = rankValue(app, mode) / maxValue,
+                        animateOnEnter = animateBars,
+                        onClick = { onOpenDetail(app) },
                     )
                 }
             }
+            if (tail.isNotEmpty()) {
+                RankOverflowSection(
+                    tail = tail,
+                    totalCount = filtered.size,
+                    mode = mode,
+                    maxValue = maxValue,
+                    onOpenDetail = onOpenDetail,
+                )
+            }
+        }
+    }
+}
+
+/**
+ * 排行第 11 名及以后的折叠区。
+ *
+ * 将展开状态收敛在独立子组合内，避免点击切换重组上方 Tab 栏与前 10 名；
+ * 使用 [AnimatedVisibility] 替代外层 `Card.animateContentSize`，消除收起首帧内容瞬移与双 spring 抢夺，
+ * 并在折叠态预先缓存前一批应用图标以降低首次展开首帧耗时。
+ */
+@Composable
+private fun RankOverflowSection(
+    tail: List<AppFreezeStats>,
+    totalCount: Int,
+    mode: RankMode,
+    maxValue: Float,
+    onOpenDetail: (AppFreezeStats) -> Unit,
+) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val clickLock = LocalCardClickLock.current
+    val arrowRotation by animateFloatAsState(
+        targetValue = if (expanded) -90f else 0f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioNoBouncy, stiffness = Spring.StiffnessMediumLow),
+        label = "rankMoreArrow",
+    )
+    val context = LocalContext.current
+    val iconSizePx = with(LocalDensity.current) { 48.dp.roundToPx() }
+    LaunchedEffect(tail, iconSizePx) {
+        for (app in tail.take(RANK_ICON_PREWARM_LIMIT)) {
+            val src = app.iconSource ?: continue
+            if (AppIconCache.getCached(src, iconSizePx) == null) {
+                AppIconCache.loadIcon(context, src, iconSizePx)
+            }
+        }
+    }
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(
+                animationSpec = RankSearchSizeSpec,
+                expandFrom = Alignment.Top,
+            ) + fadeIn(spring(stiffness = Spring.StiffnessMediumLow)),
+            exit = shrinkVertically(
+                animationSpec = spring(Spring.DampingRatioNoBouncy, Spring.StiffnessMedium, IntSize.VisibilityThreshold),
+                shrinkTowards = Alignment.Top,
+            ) + fadeOut(spring(stiffness = Spring.StiffnessMedium)),
+        ) {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                tail.forEachIndexed { offset, app ->
+                    key(app.uid) {
+                        RankRow(
+                            rank = RANK_HEAD_COUNT + offset + 1,
+                            app = app,
+                            mode = mode,
+                            fraction = rankValue(app, mode) / maxValue,
+                            animateOnEnter = false,
+                            onClick = { onOpenDetail(app) },
+                        )
+                    }
+                }
+            }
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = null,
+                    role = Role.Button,
+                ) {
+                    if (clickLock.tryAcquire(CardClickLock.ExpandWindowMillis)) {
+                        expanded = !expanded
+                    }
+                }
+                .padding(vertical = 12.dp),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = if (expanded) "收起" else "查看全部 $totalCount 个应用",
+                fontSize = 13.sp,
+                fontWeight = FontWeight.Medium,
+                color = colorScheme.primary,
+            )
+            Spacer(Modifier.width(6.dp))
+            Icon(
+                imageVector = MiuixIcons.Glass.ChevronForward,
+                contentDescription = if (expanded) "收起" else "查看全部",
+                tint = colorScheme.onSurfaceVariantSummary,
+                modifier = Modifier
+                    .size(16.dp)
+                    .graphicsLayer { rotationZ = arrowRotation },
+            )
         }
     }
 }

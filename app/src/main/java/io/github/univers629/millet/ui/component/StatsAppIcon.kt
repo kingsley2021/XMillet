@@ -54,15 +54,47 @@ fun StatsAppIcon(
     var icons by remember(sources, sizePx) {
         mutableStateOf(sources.map { it?.let { src -> AppIconCache.getCached(src, sizePx) } })
     }
-    LaunchedEffect(sources, sizePx) {
-        icons = sources.map { it?.let { src -> AppIconCache.loadIcon(context, src, sizePx) } }
+    val hasUncached = icons.any { it == null } && sources.any { it != null }
+    if (hasUncached) {
+        LaunchedEffect(sources, sizePx) {
+            icons = sources.map { it?.let { src -> AppIconCache.loadIcon(context, src, sizePx) } }
+        }
     }
 
-    BoxWithConstraints(
-        modifier = modifier.clearAndSetSemantics {
-            contentDescription = if (shared) "$label，共享 UID" else label
-        },
-    ) {
+    val semanticModifier = modifier.clearAndSetSemantics {
+        contentDescription = if (shared) "$label，共享 UID" else label
+    }
+
+    // 绝大多数普通应用走无子组合的普通 Box，避免排行展开时批量触发 BoxWithConstraints 布局开销。
+    if (!shared) {
+        val singleIcon = icons.firstOrNull()
+        val shape = RoundedCornerShape(percent = 26)
+        if (singleIcon != null) {
+            val imageBitmap = remember(singleIcon) { singleIcon.asImageBitmap() }
+            Image(
+                bitmap = imageBitmap,
+                contentDescription = null,
+                modifier = semanticModifier.clip(shape),
+            )
+        } else {
+            Box(
+                modifier = semanticModifier
+                    .clip(shape)
+                    .background(colorScheme.secondaryContainer),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = MiuixIcons.Glass.GridView,
+                    contentDescription = null,
+                    tint = colorScheme.onSecondaryContainer,
+                    modifier = Modifier.fillMaxSize(0.64f),
+                )
+            }
+        }
+        return
+    }
+
+    BoxWithConstraints(modifier = semanticModifier) {
         val extent = maxWidth
         val corner = extent * 0.26f
         val stackedIcons = icons.filterNotNull()

@@ -96,12 +96,12 @@ import top.yukonga.miuix.kmp.icon.glass.Send
 import top.yukonga.miuix.kmp.icon.glass.Report
 import top.yukonga.miuix.kmp.icon.glass.RecordingTape
 import top.yukonga.miuix.kmp.icon.glass.Prohibit
+import io.github.univers629.millet.ui.component.XMilletIcons
 import top.yukonga.miuix.kmp.icon.glass.Power
-import top.yukonga.miuix.kmp.icon.glass.MultiSplitScreen
+import top.yukonga.miuix.kmp.icon.glass.Slideshow
 import top.yukonga.miuix.kmp.icon.glass.LockOutline
-import top.yukonga.miuix.kmp.icon.glass.JumpNext
-import top.yukonga.miuix.kmp.icon.glass.HapticIntensity
-import top.yukonga.miuix.kmp.icon.glass.NoSunProtectionNeeded
+import top.yukonga.miuix.kmp.icon.glass.JumpPrevious
+import top.yukonga.miuix.kmp.icon.glass.OutdoorSports
 import top.yukonga.miuix.kmp.icon.glass.NotesOutline
 import top.yukonga.miuix.kmp.icon.glass.Battery100
 import top.yukonga.miuix.kmp.icon.glass.DisplayBrightness
@@ -209,7 +209,6 @@ fun SettingsContent(
     val enableDoze = prefs.enableDoze
     val skipStateCheck = prefs.skipStateCheck
     val disableMotionListener = prefs.disableMotionListener
-    val dozeRetryAfterAlarm = prefs.dozeRetryAfterAlarm
     val updateStatus = uiState.updateStatus
     val availableUpdateVersion = uiState.availableUpdateVersion
 
@@ -373,7 +372,7 @@ fun SettingsContent(
                             FoldablePreferenceSection(
                                 title = "Millet 墓碑冻结全局策略",
                                 summary = "已开启 ${listOf(disableKill, disableCharge, disableScreenOnThaw, blockPowerSaveWhitelist, freezeDualApp).count { it }}/5 项",
-                                icon = MiuixIcons.Glass.NoSunProtectionNeeded,
+                                icon = XMilletIcons.Snowflake,
                             ) {
                             SwitchPreference(
                                 startAction = {
@@ -444,7 +443,7 @@ fun SettingsContent(
                             SwitchPreference(
                                 startAction = {
                                     Icon(
-                                        imageVector = MiuixIcons.Glass.MultiSplitScreen,
+                                        imageVector = MiuixIcons.Glass.Slideshow,
                                         contentDescription = null,
                                         modifier = Modifier
                                             .padding(end = 8.dp)
@@ -460,7 +459,7 @@ fun SettingsContent(
                             }
                             FoldablePreferenceSection(
                                 title = "Doze 深度睡眠策略",
-                                summary = "已开启 ${listOf(enableDoze, skipStateCheck, disableMotionListener, dozeRetryAfterAlarm).count { it }}/4 项",
+                                summary = "已开启 ${listOf(enableDoze, skipStateCheck, disableMotionListener).count { it }}/3 项",
                                 icon = MiuixIcons.Glass.QuietMode,
                             ) {
                             SwitchPreference(
@@ -482,7 +481,7 @@ fun SettingsContent(
                             SwitchPreference(
                                 startAction = {
                                     Icon(
-                                        imageVector = MiuixIcons.Glass.JumpNext,
+                                        imageVector = MiuixIcons.Glass.JumpPrevious,
                                         contentDescription = null,
                                         modifier = Modifier
                                             .padding(end = 8.dp)
@@ -498,7 +497,7 @@ fun SettingsContent(
                             SwitchPreference(
                                 startAction = {
                                     Icon(
-                                        imageVector = MiuixIcons.Glass.HapticIntensity,
+                                        imageVector = MiuixIcons.Glass.OutdoorSports,
                                         contentDescription = null,
                                         modifier = Modifier
                                             .padding(end = 8.dp)
@@ -510,22 +509,6 @@ fun SettingsContent(
                                 summary = "DeviceIdleController#motionLocked，移动手机不退出深度睡眠",
                                 checked = disableMotionListener,
                                 onCheckedChange = { onSetBooleanPref(PrefsKeys.DISABLE_MOTION_LISTENER, it) }
-                            )
-                            SwitchPreference(
-                                startAction = {
-                                    Icon(
-                                        imageVector = MiuixIcons.Glass.Refresh,
-                                        contentDescription = null,
-                                        modifier = Modifier
-                                            .padding(end = 8.dp)
-                                            .size(24.dp),
-                                        tint = colorScheme.onBackground
-                                    )
-                                },
-                                title = "闹钟后补试深睡",
-                                summary = "深睡被 10 分钟内的系统闹钟拦住时，浅睡约 11 分钟后再试一次深睡",
-                                checked = dozeRetryAfterAlarm,
-                                onCheckedChange = { onSetBooleanPref(PrefsKeys.DOZE_RETRY_AFTER_ALARM, it) }
                             )
                             }
                         }

@@ -692,6 +692,9 @@ class FreezeStatsEngine(
         val (endSource, endCpuMap) = runCatching(cpuSnapshotProvider)
             .getOrDefault(CpuStatSource.NONE to emptyMap())
         var shouldSave = false
+        var missingTopUids: List<Int> = emptyList()
+        var closedSessionStartWall = 0L
+        var closedSessionEndWall = 0L
         lock.withLock {
             val closed = activeDozeSession ?: return@withLock
             activeDozeSession = null
@@ -726,6 +729,9 @@ class FreezeStatsEngine(
                     sessionCount = 1,
                 )
             }
+            missingTopUids = topSessionApps.filter { it.packageName.isEmpty() }.map { it.uid }
+            closedSessionStartWall = closed.startWallMs
+            closedSessionEndWall = effectiveWallEnd
             val session = DozeSessionData(
                 startMillis = closed.startWallMs,
                 endMillis = effectiveWallEnd,
@@ -755,6 +761,40 @@ class FreezeStatsEngine(
             recordDozeIntoScopeLocked(bootBucket, durationMs, closed.maintenanceCount, dropPct, unpluggedMs, source, deltas)
             markDirtyLocked()
             shouldSave = true
+        }
+        // 在叶锁外补查未冻结过 UID 的包名，避免持锁期间回调 PackageManager 并确保落盘数据完整。
+        if (missingTopUids.isNotEmpty()) {
+            val resolvedPkgs = HashMap<Int, String>(missingTopUids.size)
+            for (uid in missingTopUids) {
+                val pkg = runCatching {
+                    packageResolver(uid)?.takeIf { it.isNotBlank() && !it.startsWith("uid:") }
+                }.getOrNull()
+                if (pkg != null) {
+                    cachePackageName(uid, pkg)
+                    resolvedPkgs[uid] = pkg
+                }
+            }
+            if (resolvedPkgs.isNotEmpty()) {
+                lock.withLock {
+                    val idx = dozeSessionsRing.indexOfLast {
+                        it.startMillis == closedSessionStartWall && it.endMillis == closedSessionEndWall
+                    }
+                    if (idx >= 0) {
+                        val existing = dozeSessionsRing[idx]
+                        dozeSessionsRing[idx] = existing.copy(
+                            topApps = existing.topApps.map { app ->
+                                val resolved = resolvedPkgs[app.uid]
+                                if (app.packageName.isEmpty() && resolved != null) {
+                                    app.copy(packageName = resolved)
+                                } else {
+                                    app
+                                }
+                            }
+                        )
+                        markDirtyLocked()
+                    }
+                }
+            }
         }
         if (shouldSave) {
             triggerAsyncSaveIfDirty()

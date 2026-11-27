@@ -111,8 +111,7 @@ import top.yukonga.miuix.kmp.basic.TextButton
 import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.glass.Add
-import top.yukonga.miuix.kmp.icon.glass.Layers
-import top.yukonga.miuix.kmp.icon.glass.Tune
+import top.yukonga.miuix.kmp.icon.glass.ListView
 import top.yukonga.miuix.kmp.icon.basic.Check
 import top.yukonga.miuix.kmp.icon.glass.Back
 import top.yukonga.miuix.kmp.icon.extended.Close
@@ -476,7 +475,7 @@ private fun TemplateArrowRow(
     ArrowPreference(
         startAction = {
             Icon(
-                imageVector = if (template.builtIn) MiuixIcons.Glass.Layers else MiuixIcons.Glass.Tune,
+                imageVector = MiuixIcons.Glass.ListView,
                 contentDescription = null,
                 modifier = Modifier
                     .padding(end = 8.dp)
@@ -645,7 +644,7 @@ private fun PolicyTemplateDetailContent(
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
-                            imageVector = if (template.builtIn) MiuixIcons.Glass.Layers else MiuixIcons.Glass.Tune,
+                            imageVector = MiuixIcons.Glass.ListView,
                             contentDescription = null,
                             tint = colorScheme.onSecondaryContainer,
                             modifier = Modifier.size(26.dp)
