@@ -38,6 +38,8 @@ class HookIdTargetHintsTest {
             "S29" to "GreezeManagerService#checkStateForScrOff",
             "S32_CLOUD_FROZEN_WL" to "ListAppsManager#dealCloudWhiteList",
             "S33_POLICY_ALLOW_FREEZE" to "PolicyMaker#isAllowFreeze",
+            "S41_ALARM_ADJUST_IDLE_UNTIL" to "AlarmManagerService#adjustIdleUntilTime",
+            "S42_DOZE_CONSTRAINTS" to "DeviceIdleController#updateActiveConstraintsLocked",
             "P28_NO_RESTRICT" to "ActiveStateController#dealNoRestrictApp"
         )
 

@@ -175,6 +175,8 @@ internal val HOOK_ID_TARGET_HINTS: Map<String, String> = mapOf(
     "S38_DOZE_BECOME_ACTIVE" to "DeviceIdleController#becomeActiveLocked",
     "S39_DOZE_STEP_IDLE" to "DeviceIdleController#stepIdleStateLocked",
     "S40_DOZE_EVENT" to "DeviceIdleController#addEvent",
+    "S41_ALARM_ADJUST_IDLE_UNTIL" to "AlarmManagerService#adjustIdleUntilTime",
+    "S42_DOZE_CONSTRAINTS" to "DeviceIdleController#updateActiveConstraintsLocked",
 )
 
 private fun describeHookId(id: String): String {

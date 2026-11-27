@@ -9,19 +9,52 @@ import org.junit.Test
 class HookDecisionsTest {
 
     @Test
-    fun `bypassUpcomingAlarmWhileForced needs forced flag and a stuck state`() {
-        // 强制推进 + 卡在 QUICK_DOZE_DELAY(7) 或 INACTIVE(1)：OS4/OS3 都在这里被闹钟判定打断。
-        assertTrue(HookDecisions.bypassUpcomingAlarmWhileForced(true, HookDecisions.STATE_QUICK_DOZE_DELAY))
-        assertTrue(HookDecisions.bypassUpcomingAlarmWhileForced(true, HookDecisions.STATE_INACTIVE))
-        // 强制但状态不在这两档：ROM 的闹钟保护照常生效，避免把用户闹钟推迟。
-        assertFalse(HookDecisions.bypassUpcomingAlarmWhileForced(true, 0))
-        assertFalse(HookDecisions.bypassUpcomingAlarmWhileForced(true, 5))
-        assertFalse(HookDecisions.bypassUpcomingAlarmWhileForced(true, null))
-        // 未强制：无论状态如何都不接管。
+    fun `skipIdlePendingTargetState uses LOCATING while forced and MAINTENANCE otherwise`() {
+        assertEquals(HookDecisions.STATE_LOCATING, HookDecisions.skipIdlePendingTargetState(true))
+        assertEquals(HookDecisions.STATE_IDLE_MAINTENANCE, HookDecisions.skipIdlePendingTargetState(false))
+        assertEquals(HookDecisions.STATE_IDLE_MAINTENANCE, HookDecisions.skipIdlePendingTargetState(null))
+    }
+
+    @Test
+    fun `bypassUpcomingAlarmWhileForced bypasses across all states only when forced`() {
+        // 强制推进期间全状态短路，防止 force-idle 循环在中间态被闹钟判定打回并死锁。
+        for (state in 0..HookDecisions.STATE_QUICK_DOZE_DELAY) {
+            assertTrue(HookDecisions.bypassUpcomingAlarmWhileForced(true, state))
+        }
+        assertTrue(HookDecisions.bypassUpcomingAlarmWhileForced(true, null))
+        // 未强制或读取失败时保持 ROM 原逻辑。
         assertFalse(HookDecisions.bypassUpcomingAlarmWhileForced(false, HookDecisions.STATE_QUICK_DOZE_DELAY))
         assertFalse(HookDecisions.bypassUpcomingAlarmWhileForced(false, HookDecisions.STATE_INACTIVE))
-        // 反射读不到 mForceIdle 时按「未强制」处理，保持 ROM 原行为。
         assertFalse(HookDecisions.bypassUpcomingAlarmWhileForced(null, HookDecisions.STATE_QUICK_DOZE_DELAY))
+    }
+
+    @Test
+    fun `bypassAlarmIdleUntilFuzz requires forced doze, enabled flag and idle-until alarm bit`() {
+        val idleUntilFlag = HookDecisions.ALARM_FLAG_IDLE_UNTIL
+        assertTrue(HookDecisions.bypassAlarmIdleUntilFuzz(true, dozeEnabled = true, alarmFlags = idleUntilFlag))
+        assertTrue(HookDecisions.bypassAlarmIdleUntilFuzz(true, dozeEnabled = true, alarmFlags = idleUntilFlag or 1))
+        // 普通闹钟或系统闹钟（FLAG_STANDALONE=1 | FLAG_WAKE_FROM_IDLE=2）不含 FLAG_IDLE_UNTIL，不干预。
+        assertFalse(HookDecisions.bypassAlarmIdleUntilFuzz(true, dozeEnabled = true, alarmFlags = 0x3))
+        assertFalse(HookDecisions.bypassAlarmIdleUntilFuzz(true, dozeEnabled = true, alarmFlags = 0x8))
+        assertFalse(HookDecisions.bypassAlarmIdleUntilFuzz(true, dozeEnabled = true, alarmFlags = null))
+        // 非强制或未启用 Doze 增强时不干预。
+        assertFalse(HookDecisions.bypassAlarmIdleUntilFuzz(false, dozeEnabled = true, alarmFlags = idleUntilFlag))
+        assertFalse(HookDecisions.bypassAlarmIdleUntilFuzz(null, dozeEnabled = true, alarmFlags = idleUntilFlag))
+        assertFalse(HookDecisions.bypassAlarmIdleUntilFuzz(true, dozeEnabled = false, alarmFlags = idleUntilFlag))
+    }
+
+    @Test
+    fun `clearBlockingConstraintsWhileForced applies only to forced pre-idle states`() {
+        for (state in 1..4) {
+            assertTrue(HookDecisions.clearBlockingConstraintsWhileForced(true, dozeEnabled = true, state = state))
+        }
+        // ACTIVE(0)、IDLE(5)、IDLE_MAINTENANCE(6)、QUICK_DOZE_DELAY(7) 与 null 不清零。
+        for (state in listOf(0, 5, 6, 7, null)) {
+            assertFalse(HookDecisions.clearBlockingConstraintsWhileForced(true, dozeEnabled = true, state = state))
+        }
+        assertFalse(HookDecisions.clearBlockingConstraintsWhileForced(false, dozeEnabled = true, state = 3))
+        assertFalse(HookDecisions.clearBlockingConstraintsWhileForced(null, dozeEnabled = true, state = 3))
+        assertFalse(HookDecisions.clearBlockingConstraintsWhileForced(true, dozeEnabled = false, state = 3))
     }
 
     @Test

@@ -42,7 +42,9 @@ import io.github.univers629.millet.ipc.SystemBinderService
  * - S18: GreezeManagerService#thawProcess (after, simplifyLog 门控)
  * - S19: AnrHelper#appNotResponding / deferAppNotResponding (before, 遍历 getDeclaredMethods())
  * - S20: GreezeManagerService#thawUid (before)
- * - S34: DeviceIdleController#isUpcomingAlarmClock (before, 仅强制推进且状态为 7 时短路)
+ * - S34: DeviceIdleController#isUpcomingAlarmClock (before, 强制推进期间全状态短路)
+ * - S41: AlarmManagerService#adjustIdleUntilTime (before, 强制深睡期间跳过提前唤醒裁切)
+ * - S42: DeviceIdleController#updateActiveConstraintsLocked (after, 强制推进前置阶段清零阻塞约束计数)
  */
 object SystemHooks {
 
@@ -149,6 +151,8 @@ object SystemHooks {
         BroadcastAndDozeHooks.buildS38DeviceIdleBecomeActiveHook(),
         BroadcastAndDozeHooks.buildS39DeviceIdleStepStateHook(),
         BroadcastAndDozeHooks.buildS40DeviceIdleEventHook(),
+        BroadcastAndDozeHooks.buildS41AlarmAdjustIdleUntilHook(),
+        BroadcastAndDozeHooks.buildS42DeviceIdleConstraintsHook(),
         FreezeGateHooks.buildS2GreezeLifecycleReadyHook(),
         FreezeGateHooks.buildWakeLockHook(),
         FreezeGateHooks.buildSystemProcessManagerKillHook()

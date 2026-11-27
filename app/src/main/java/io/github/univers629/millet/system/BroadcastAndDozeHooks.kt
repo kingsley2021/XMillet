@@ -52,6 +52,8 @@ object BroadcastAndDozeHooks {
     private const val CLASS_BROADCAST_FILTER = "com.android.server.am.BroadcastFilter"
     private const val CLASS_DEVICE_IDLE_CONTROLLER = "com.android.server.DeviceIdleController"
     private const val CLASS_DEVICE_IDLE_SHELL = "com.android.server.DeviceIdleController\$Shell"
+    private const val CLASS_ALARM_MANAGER_SERVICE = "com.android.server.alarm.AlarmManagerService"
+    private const val CLASS_ALARM = "com.android.server.alarm.Alarm"
 
     private const val REASON_XMILLET_FORCE = "XMilletForce"
     private const val REASON_XMILLET_SKIP = "XMilletSkip"
@@ -444,17 +446,37 @@ object BroadcastAndDozeHooks {
                 val state = (param.args.getOrNull(0) as? Int) ?: return@HookSpec
                 val reason = (param.args.getOrNull(1) as? String) ?: ""
                 if (state == 2 && reason != REASON_XMILLET_FORCE) {
-                    param.args[0] = 6
                     val controller = SystemState.deviceIdleController ?: param.thisObject
+                    val forced = controller?.let {
+                        runCatching { XReflect.getObjectField(it, "mForceIdle") as? Boolean }.getOrNull()
+                    }
+                    val targetState = HookDecisions.skipIdlePendingTargetState(forced)
+                    param.args[0] = targetState
                     if (controller != null) {
                         try {
                             XReflect.callMethod(controller, "resetIdleManagementLocked")
                         } catch (_: Throwable) {
                         }
+                        if (targetState == STATE_IDLE_MAINTENANCE) {
+                            runCatching {
+                                val constants = XReflect.getObjectField(controller, "mConstants")
+                                if (constants != null) {
+                                    val idleTimeout = (XReflect.getObjectField(constants, "IDLE_TIMEOUT") as? Long) ?: 0L
+                                    val pendingTimeout =
+                                        (XReflect.getObjectField(constants, "IDLE_PENDING_TIMEOUT") as? Long) ?: 0L
+                                    if (idleTimeout > 0L) {
+                                        XReflect.setObjectField(controller, "mNextIdleDelay", idleTimeout)
+                                    }
+                                    if (pendingTimeout > 0L) {
+                                        XReflect.setObjectField(controller, "mNextIdlePendingDelay", pendingTimeout)
+                                    }
+                                }
+                            }
+                        }
                     }
                     if (prefs.dozeLog) {
                         param.args[1] = REASON_XMILLET_SKIP
-                        Logger.doze(Logger.Level.INFO, "[Doze]:状态IDLE_PENDING,跳过其他进入IDLE")
+                        Logger.doze(Logger.Level.INFO, "[Doze]:状态IDLE_PENDING,跳过其他进入IDLE target=$targetState")
                     }
                 }
             }
@@ -498,17 +520,11 @@ object BroadcastAndDozeHooks {
     /**
      * S34：DeviceIdleController#isUpcomingAlarmClock()
      *
-     * `stepIdleStateLocked` 开头只要判定「一次从 idle 唤醒的闹钟即将到来」就先
-     * `becomeActiveLocked("alarm")` 再 `becomeInactiveIfAppropriateLocked()`，强制推进被原地打断：
-     *
-     * - OS4 在 QUICK_DOZE_DELAY(7) 下自锁：`becomeInactiveIfAppropriateLocked()` 在 QuickDoze
-     *   打开时把状态推回 7，推进循环无法前进，最终 `stopped at QUICK_DOZE_DELAY`。
-     * - OS3 在 INACTIVE(1) 下直接返回，最终 `stopped at INACTIVE`（微信等应用挂
-     *   `FLAG_WAKE_FROM_IDLE` 周期闹钟时长期成立）。
-     *
-     * 强制进入深睡是本模块的明确意图，此时跳过「让闹钟先响」这条保护，状态机才能继续推进。
-     * 只在 `mForceIdle == true` 且状态为 7 或 1 时短路，其余路径保持 ROM 原样（该判定还决定
-     * 闹钟重排时间，短路后按 QUICK_DOZE_DELAY_TIMEOUT 重排，不影响其他行为）。
+     * `stepIdleStateLocked` 在检测到 `MIN_TIME_TO_ALARM` 窗口内存在 `FLAG_WAKE_FROM_IDLE` 闹钟时
+     * 会调用 `becomeActiveLocked("alarm")` 并重进 `becomeInactiveIfAppropriateLocked()`，中断强制深睡。
+     * 强制推进期间（`mForceIdle == true`）全状态短路为 false，避免推进循环在中间态回弹死锁；
+     * 系统闹钟自身携带 `FLAG_WAKE_FROM_IDLE`，在深睡状态下仍由 `AlarmManagerService` 准时触发。
+     * 非强制路径保持 ROM 原逻辑。
      */
     fun buildS34DeviceIdleUpcomingAlarmHook(): HookSpec = HookSpec(
         id = "S34",
@@ -524,7 +540,6 @@ object BroadcastAndDozeHooks {
             val forced = runCatching {
                 XReflect.getObjectField(controller, "mForceIdle") as? Boolean
             }.getOrNull()
-            // 只在「强制推进 + 卡在 QUICK_DOZE_DELAY(7) 或 INACTIVE(1)」时短路，其余路径保持 ROM 原行为。
             val state = runCatching {
                 XReflect.getIntField(controller, "mState").takeIf { it in 0..7 }
             }.getOrNull()
@@ -532,6 +547,71 @@ object BroadcastAndDozeHooks {
             param.result = false
             if (PrefReader.systemPrefs.dozeLog) {
                 Logger.doze(Logger.Level.INFO, "[Doze]:强制推进时跳过即将到来的闹钟判定 state=$state")
+            }
+        }
+    )
+
+    /**
+     * S41：AlarmManagerService#adjustIdleUntilTime(Alarm)
+     *
+     * 强制深睡期间跳过 `AlarmManagerService` 对 `FLAG_IDLE_UNTIL` 的提前唤醒裁切，
+     * 避免距系统闹钟不足 2～15 分钟时刚进 `IDLE(5)` 即被拉入 `IDLE_MAINTENANCE(6)`。
+     * 系统闹钟本身的触发不受 `mPendingIdleUntil` 推迟，仍准时响铃。
+     */
+    fun buildS41AlarmAdjustIdleUntilHook(): HookSpec = HookSpec(
+        id = "S41_ALARM_ADJUST_IDLE_UNTIL",
+        name = "AlarmManagerService#adjustIdleUntilTime",
+        targetClass = CLASS_ALARM_MANAGER_SERVICE,
+        methodName = "adjustIdleUntilTime",
+        paramTypes = listOf(CLASS_ALARM),
+        mode = HookMode.BEFORE,
+        successLog = "Doze 闹钟提前唤醒裁切拦截成功",
+        before = { param ->
+            if (!SystemState.isGreezeReady) return@HookSpec
+            val alarm = param.args.getOrNull(0) ?: return@HookSpec
+            val flags = runCatching { XReflect.getIntField(alarm, "flags") }.getOrNull()
+            val forced = controllerBoolean("mForceIdle")
+            if (!HookDecisions.bypassAlarmIdleUntilFuzz(forced, PrefReader.systemPrefs.enableDoze, flags)) {
+                return@HookSpec
+            }
+            val restored = runCatching {
+                XReflect.callMethod(param.thisObject, "restoreRequestedTime", alarm) as? Boolean
+            }.getOrDefault(false)
+            param.result = restored
+            if (PrefReader.systemPrefs.dozeLog) {
+                Logger.doze(Logger.Level.INFO, "[Doze]:强制深睡期间跳过 AlarmManager 提前唤醒裁切")
+            }
+        }
+    )
+
+    /**
+     * S42：DeviceIdleController#updateActiveConstraintsLocked()
+     *
+     * 强制推进经过 `INACTIVE`～`LOCATING` 阶段时清零 `mNumBlockingConstraints`，
+     * 避免无运动传感器分支中的约束判断中断 `force-idle deep`。
+     */
+    fun buildS42DeviceIdleConstraintsHook(): HookSpec = HookSpec(
+        id = "S42_DOZE_CONSTRAINTS",
+        name = "DeviceIdleController#updateActiveConstraintsLocked",
+        targetClass = CLASS_DEVICE_IDLE_CONTROLLER,
+        methodName = "updateActiveConstraintsLocked",
+        paramTypes = emptyList(),
+        mode = HookMode.AFTER,
+        successLog = "Doze 阻塞约束放行点注册成功",
+        after = { param ->
+            if (!SystemState.isGreezeReady) return@HookSpec
+            val controller = param.thisObject ?: SystemState.deviceIdleController ?: return@HookSpec
+            val forced = runCatching {
+                XReflect.getObjectField(controller, "mForceIdle") as? Boolean
+            }.getOrNull()
+            val state = runCatching {
+                XReflect.getIntField(controller, "mState").takeIf { it in 0..7 }
+            }.getOrNull()
+            if (!HookDecisions.clearBlockingConstraintsWhileForced(forced, PrefReader.systemPrefs.enableDoze, state)) {
+                return@HookSpec
+            }
+            runCatching {
+                XReflect.setIntField(controller, "mNumBlockingConstraints", 0)
             }
         }
     )
@@ -857,9 +937,14 @@ object BroadcastAndDozeHooks {
         }
         Logger.alwaysWarn("深度睡眠失败 $out")
         val blockers = logIdleConstraintsLocked()
+        val controller = SystemState.deviceIdleController
         var state = idleStateLocked()
         for (attempt in 1..4) {
             if (state == null || state == STATE_IDLE) break
+            // force-idle 失败后会退出强制态，这里清零约束计数再以 step 推进。
+            if (controller != null) {
+                runCatching { XReflect.setIntField(controller, "mNumBlockingConstraints", 0) }
+            }
             val (stepCode, stepOut) = execIdleShellCommand("step", "deep")
             if (stepCode != 0) {
                 Logger.alwaysWarn("Doze 推进失败 $stepOut")
@@ -867,6 +952,9 @@ object BroadcastAndDozeHooks {
             }
             state = idleStateLocked()
             Logger.alwaysWarn("Doze 推进 $attempt 次: state=$state")
+        }
+        if (controller != null && state != STATE_IDLE && state != STATE_IDLE_MAINTENANCE) {
+            runCatching { XReflect.callMethod(controller, "updateActiveConstraintsLocked") }
         }
         if (state == STATE_IDLE) {
             val (retryCode, retryOut) = execIdleShellCommand("force-idle", "deep")

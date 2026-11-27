@@ -15,23 +15,65 @@ object HookDecisions {
     /** DeviceIdleController 的 INACTIVE 状态值（熄屏后进入浅睡前的等待态）。 */
     const val STATE_INACTIVE = 1
 
+    /** DeviceIdleController 的 LOCATING 状态值（进入 IDLE 前的最后前置态）。 */
+    const val STATE_LOCATING = 4
+
+    /** DeviceIdleController 的 IDLE_MAINTENANCE 状态值（深睡维护态）。 */
+    const val STATE_IDLE_MAINTENANCE = 6
+
+    /** AlarmManagerService 中标记 `DeviceIdleController.deep` 的 `FLAG_IDLE_UNTIL` 位（1 << 4）。 */
+    const val ALARM_FLAG_IDLE_UNTIL = 16
+
     /**
-     * S34：`DeviceIdleController#isUpcomingAlarmClock` 是否该被短路。
+     * S14：`moveToStateLocked(IDLE_PENDING)` 的跳过目标状态。
      *
-     * 短路条件收紧为「本模块正在强制推进深睡」且状态卡在 `QUICK_DOZE_DELAY(7)` 或
-     * `INACTIVE(1)」，两种状态的成因不同但结果一样，都会让推进循环原地退出：
-     *
-     * - `QUICK_DOZE_DELAY(7)`：OS4 的 `stepIdleStateLocked` 先 `becomeActiveLocked("alarm")`
-     *   再 `becomeInactiveIfAppropriateLocked()`，后者把状态推回 7。
-     * - `INACTIVE(1)`：OS3 的 `stepIdleStateLocked` 在 case 1 之前就返回，日志停在
-     *   `Unable to go deep idle; stopped at INACTIVE`。实测 OS3.0.304.0.WOMCNXM 上
-     *   微信每 15 分钟挂一次 `FLAG_WAKE_FROM_IDLE` 闹钟（window +11m15s），使
-     *   `isUpcomingAlarmClock()` 长期为真，强制推进永远走不出 1。
-     *
-     * 其他情形一律放行 ROM 原逻辑 —— 尤其非强制路径，短路会把用户设定的闹钟推迟。
+     * `resetIdleManagementLocked()` 会把 `mNextIdleDelay` 与 `mNextIdlePendingDelay` 清零。
+     * 强制推进期间改写到 `LOCATING(4)`，后续 `stepIdleStateLocked` 经 `case 4` 重新初始化
+     * `IDLE_TIMEOUT` 再进入 `IDLE(5)`，避免从 `case 6` 以 0ms 立即弹回 `IDLE_MAINTENANCE`。
+     * 非强制路径仍改写到 `IDLE_MAINTENANCE(6)`，由调用方补回超时字段。
      */
-    fun bypassUpcomingAlarmWhileForced(forceIdle: Boolean?, state: Int?): Boolean =
-        forceIdle == true && (state == STATE_QUICK_DOZE_DELAY || state == STATE_INACTIVE)
+    fun skipIdlePendingTargetState(forceIdle: Boolean?): Int =
+        if (forceIdle == true) STATE_LOCATING else STATE_IDLE_MAINTENANCE
+
+    /**
+     * S34：`DeviceIdleController#isUpcomingAlarmClock` 是否短路为 false。
+     *
+     * `force-idle deep` 在循环中反复调用 `stepIdleStateLocked` 推进状态机（1 → 2/6 → … → 5）。
+     * 仅在单个状态短路会导致后续迭代再次命中 `isUpcomingAlarmClock()`、将状态打回 `ACTIVE → INACTIVE`
+     * 并在推进循环内死锁。强制推进（`mForceIdle == true`）期间全状态短路可消除该循环；
+     * 紧急呼叫判定位于此方法之前不受影响，且系统闹钟携带 `FLAG_WAKE_FROM_IDLE`，在深睡状态下仍按时触发。
+     * 非强制路径保持 ROM 原逻辑。
+     */
+    fun bypassUpcomingAlarmWhileForced(forceIdle: Boolean?, state: Int? = null): Boolean =
+        forceIdle == true
+
+    /**
+     * S41：`AlarmManagerService#adjustIdleUntilTime` 是否跳过对 `FLAG_IDLE_UNTIL` 的提前裁切。
+     *
+     * 进入深睡后，`AlarmManagerService` 会在距下一次 `FLAG_WAKE_FROM_IDLE` 闹钟 2～15 分钟时
+     * 将 `mPendingIdleUntil` 提前触发（≤ 2 分钟时设为立即触发），使设备很快切入 `IDLE_MAINTENANCE`。
+     * 仅在模块强制深睡且启用 Doze 增强时跳过该裁切，保持 `IDLE(5)` 直至闹钟按时触发。
+     */
+    fun bypassAlarmIdleUntilFuzz(
+        forceIdle: Boolean?,
+        dozeEnabled: Boolean,
+        alarmFlags: Int?,
+    ): Boolean = forceIdle == true &&
+        dozeEnabled &&
+        alarmFlags != null &&
+        (alarmFlags and ALARM_FLAG_IDLE_UNTIL) != 0
+
+    /**
+     * S42：强制推进经过前置阶段（`INACTIVE`～`LOCATING`，状态 1..4）时清零阻塞约束计数。
+     *
+     * `stepIdleStateLocked` 在无运动传感器回退分支检查 `mNumBlockingConstraints != 0` 且未豁免
+     * `mForceIdle`，强制推进期间清零该计数可避免状态机停滞在前置阶段；非强制路径与已进入 `IDLE` 后不干预。
+     */
+    fun clearBlockingConstraintsWhileForced(
+        forceIdle: Boolean?,
+        dozeEnabled: Boolean,
+        state: Int?,
+    ): Boolean = forceIdle == true && dozeEnabled && state != null && state in 1..4
 
     /**
      * S40：`DeviceIdleController#addEvent` 的事件码折算成深度睡眠状态。
