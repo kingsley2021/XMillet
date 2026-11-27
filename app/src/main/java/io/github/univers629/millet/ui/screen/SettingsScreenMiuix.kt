@@ -91,6 +91,7 @@ import top.yukonga.miuix.kmp.blur.layerBackdrop
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.glass.Widget
 import top.yukonga.miuix.kmp.icon.glass.Timer
+import top.yukonga.miuix.kmp.icon.glass.Refresh
 import top.yukonga.miuix.kmp.icon.glass.Send
 import top.yukonga.miuix.kmp.icon.glass.Report
 import top.yukonga.miuix.kmp.icon.glass.RecordingTape
@@ -208,6 +209,7 @@ fun SettingsContent(
     val enableDoze = prefs.enableDoze
     val skipStateCheck = prefs.skipStateCheck
     val disableMotionListener = prefs.disableMotionListener
+    val dozeRetryAfterAlarm = prefs.dozeRetryAfterAlarm
     val updateStatus = uiState.updateStatus
     val availableUpdateVersion = uiState.availableUpdateVersion
 
@@ -458,7 +460,7 @@ fun SettingsContent(
                             }
                             FoldablePreferenceSection(
                                 title = "Doze 深度睡眠策略",
-                                summary = "已开启 ${listOf(enableDoze, skipStateCheck, disableMotionListener).count { it }}/3 项",
+                                summary = "已开启 ${listOf(enableDoze, skipStateCheck, disableMotionListener, dozeRetryAfterAlarm).count { it }}/4 项",
                                 icon = MiuixIcons.Glass.QuietMode,
                             ) {
                             SwitchPreference(
@@ -508,6 +510,22 @@ fun SettingsContent(
                                 summary = "DeviceIdleController#motionLocked，移动手机不退出深度睡眠",
                                 checked = disableMotionListener,
                                 onCheckedChange = { onSetBooleanPref(PrefsKeys.DISABLE_MOTION_LISTENER, it) }
+                            )
+                            SwitchPreference(
+                                startAction = {
+                                    Icon(
+                                        imageVector = MiuixIcons.Glass.Refresh,
+                                        contentDescription = null,
+                                        modifier = Modifier
+                                            .padding(end = 8.dp)
+                                            .size(24.dp),
+                                        tint = colorScheme.onBackground
+                                    )
+                                },
+                                title = "闹钟后补试深睡",
+                                summary = "深睡被 10 分钟内的系统闹钟拦住时，浅睡约 11 分钟后再试一次深睡",
+                                checked = dozeRetryAfterAlarm,
+                                onCheckedChange = { onSetBooleanPref(PrefsKeys.DOZE_RETRY_AFTER_ALARM, it) }
                             )
                             }
                         }

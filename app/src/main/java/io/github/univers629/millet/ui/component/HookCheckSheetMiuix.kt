@@ -215,7 +215,9 @@ fun HookCheckSheetMiuix(
                 summary = item.summaryText,
                 level = item.level,
                 detailRows = parseConsoleDetailRows(item.consoleLines),
-                suggestion = item.suggestion.takeIf { item.level != HookDiagnosticLevel.PASSED },
+                suggestion = item.suggestion.takeIf {
+                    item.level != HookDiagnosticLevel.PASSED || item.suggestionWhenPassed
+                },
             )
         }
     }

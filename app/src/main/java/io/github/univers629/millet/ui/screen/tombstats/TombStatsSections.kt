@@ -93,7 +93,9 @@ import io.github.univers629.millet.ui.model.DozeSummaryUiModel
 import io.github.univers629.millet.ui.model.FreezeStatsSnapshot
 import io.github.univers629.millet.ui.model.RankMode
 import io.github.univers629.millet.ui.model.StatsRecentEvent
+import io.github.univers629.millet.ui.model.allSessionsBackfilled
 import io.github.univers629.millet.ui.model.originLabel
+import io.github.univers629.millet.ui.model.summaryLabel
 import io.github.univers629.millet.ui.theme.isInDarkTheme
 import io.github.univers629.millet.ui.util.PopupBackdropHolder
 import java.text.SimpleDateFormat
@@ -561,6 +563,15 @@ private fun DozeAttributionCard(
                 }
             }
 
+            if (summary.allSessionsBackfilled()) {
+                Text(
+                    text = "最近会话均来自开机回填：实时状态迁移没有被记录，电量与 CPU 明细缺失。",
+                    fontSize = 11.sp,
+                    lineHeight = 16.sp,
+                    color = colorScheme.onSurfaceVariantSummary,
+                )
+            }
+
             if (summary.apps.isNotEmpty()) {
                 val topApps = summary.apps.take(5)
                 val maxCpu = topApps.maxOfOrNull { it.cpuMillis }?.coerceAtLeast(1L) ?: 1L
@@ -672,12 +683,6 @@ private fun DozeAttributionCard(
                 ) {
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         summary.recentSessions.take(6).forEach { s ->
-                            val batText = when {
-                                s.chargedDuringSession -> "充电中"
-                                s.startBatteryPct in 0..100 && s.endBatteryPct in 0..100 ->
-                                    "${s.startBatteryPct}%→${s.endBatteryPct}%"
-                                else -> "电量未知"
-                            }
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.SpaceBetween,
@@ -690,7 +695,7 @@ private fun DozeAttributionCard(
                                     modifier = Modifier.weight(1f),
                                 )
                                 Text(
-                                    text = "维护 ${s.maintenanceCount} 次 · $batText",
+                                    text = s.summaryLabel(),
                                     fontSize = 12.sp,
                                     color = colorScheme.onSurfaceVariantSummary,
                                 )

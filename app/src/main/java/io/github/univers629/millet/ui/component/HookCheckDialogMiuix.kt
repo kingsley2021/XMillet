@@ -22,6 +22,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.univers629.millet.core.HookInstallRegistry
+import io.github.univers629.millet.core.RomCapabilities
 import io.github.univers629.millet.core.RootHelper
 import io.github.univers629.millet.core.VersionGate
 import io.github.univers629.millet.core.XposedPrefsBridge
@@ -64,6 +65,11 @@ data class HookDiagnosticEntry(
      * 面向流式检测日志与用户截图反馈的紧凑技术明细行（如两侧覆盖比、能力位、缺失/失败点位 ID）。
      */
     val consoleLines: List<String> = emptyList(),
+    /**
+     * 通过项也需要显示建议时置 true（如 Doze：观测点齐备，但上次深睡被系统拒绝）。
+     * 默认 false，避免通过项堆满建议文案。
+     */
+    val suggestionWhenPassed: Boolean = false,
 )
 
 private fun triFlag(value: Boolean?): String = when (value) {
@@ -76,19 +82,43 @@ private fun formatWireBrief(label: String, wire: HookInstallRegistry.Wire): Stri
     if (!wire.hasData) return "$label: 未上报"
     return buildString {
         append(label).append(": ").append(wire.installed).append('/').append(wire.total)
-        if (wire.failed.isNotEmpty()) append(" | 失败=").append(wire.failed.joinToString(","))
-        if (wire.unsupported.isNotEmpty()) append(" | 未支持=").append(wire.unsupported.joinToString(","))
-        if (wire.gated.isNotEmpty()) append(" | 门控=").append(wire.gated.joinToString(","))
+        if (wire.failed.isNotEmpty()) {
+            append(" | 失败=").append(wire.failed.joinToString(",") { describeHookId(it) })
+        }
+        if (wire.unsupported.isNotEmpty()) {
+            append(" | 未支持=").append(wire.unsupported.joinToString(",") { describeHookId(it) })
+        }
+        if (wire.gated.isNotEmpty()) {
+            append(" | 门控=").append(wire.gated.joinToString(",") { describeHookId(it) })
+        }
     }
 }
 
-private val HOOK_ID_TARGET_HINTS: Map<String, String> = mapOf(
+/**
+ * 点位编号到宿主方法名的对照表。
+ *
+ * 覆盖列表原始值仅含 `S22`、`P28_NO_RESTRICT` 等编号；此处将 73 个点位映射为
+ * 「编号(类#方法)」，便于诊断页在未支持/失败项中直接显示对应的宿主类与方法。
+ * 新增点位时同步补一行即可，缺条目会退化成裸编号。
+ */
+internal val HOOK_ID_TARGET_HINTS: Map<String, String> = mapOf(
+    "P1" to "PowerKeeperApplication#onCreate",
     "P2" to "MilletPolicy#<init>",
     "P3" to "MilletPolicy#dealCloudWhiteList",
+    "P4" to "MilletPolicy#onCloudWhiteListChanged",
     "P5" to "MilletPolicy#dealNoRestrictApp",
+    "P6" to "MilletPolicy#dealSleepModeWhiteList",
     "P7" to "CommonAdapter#addPowerSaveWhitelistApps",
     "P8" to "CommonAdapter#removePowerSaveWhitelistApps",
+    "P9" to "MilletHandler#handleMessage",
+    "P10" to "MilletBrightHandler#handleMessage",
     "P11" to "PowerCheckerController#clearApp",
+    "P12" to "PowerStateMachine#clearAppWhenScreenOffTimeOut",
+    "P13" to "PowerStateMachine#clearAppWhenScreenOffTimeOutInNight",
+    "P14" to "PowerStateMachine#clearUnactiveApps",
+    "P17" to "FreezeBinder#<init>",
+    "P18" to "PowerKeeperManager#<init>",
+    "P20" to "BrightScenarioBase#<init>",
     "P21_KILL" to "ProcessManager#kill",
     "P22_KILL_POLICY" to "KillProcessController#shouldKillByCheckerPolicy",
     "P23_FROZEN_DECISION" to "FrozenAppController#appIsAllowToFrozen",
@@ -97,21 +127,54 @@ private val HOOK_ID_TARGET_HINTS: Map<String, String> = mapOf(
     "P26_AUDIO_KILL" to "AudioDisguiseController#killApp",
     "P27" to "GlobalFeatureConfigureHelper#updateGlobalConfigure",
     "P28_NO_RESTRICT" to "ActiveStateController#dealNoRestrictApp",
+    "P29" to "MilletUtils#isAppUid",
     "P30_CLOUD_DOZE_READ" to "GlobalFeatureConfigureHelper#getDozeWhiteListApps",
     "P31_USER_POWER_SAVE_CONFIG" to "PowerSaveConfigureManager#setPowerSaveAppConfigure",
     "P32_GET_POWER_SAVE_CONFIG" to "PowerSaveConfigureManager#getPowerSaveAppConfigure",
+    "P33_CHARGE_STRATEGY" to "FrozenAppController#setChangeFrozenStrategy",
+    "P34" to "AppClusterController#isControlApp",
     "P35_FAST_SCREEN_OFF_FREEZE" to "AppStateFrozenControl#frozenAppLater",
     "P36_BRIGHT_FROZEN_THAW" to "BrightController#frozenThaw",
+    "S1" to "ActivityManagerService#registerReceiverWithFeature",
     "S2" to "GreezeManagerService#<init>",
+    "S2_Gate" to "GreezeManagerService#<init>_Lifecycle",
+    "S3" to "AurogonImmobulusMode#<init>",
+    "S4" to "ProcessList#addProcessNameLocked",
+    "S5" to "ProcessErrorStateRecord#appNotResponding",
     "S6" to "GreezeManagerService#freezeUids",
     "S7" to "GreezeManagerService#freezeAction",
     "S8" to "AurogonImmobulusMode#checkAppStatusForFreeze",
+    "S9" to "BroadcastSkipPolicy#shouldSkipMessage",
+    "S10" to "BroadcastQueue#deliverToRegisteredReceiverLocked",
+    "S11" to "ActivityManagerService#setSystemProcess",
+    "S12" to "DeviceIdleController#onStart",
+    "S13" to "DeviceIdleController#motionLocked",
+    "S14" to "DeviceIdleController#moveToStateLocked",
+    "S15" to "ProcessList#removeProcessNameLocked",
+    "S16" to "ProcessList#handleProcessStartedLocked",
+    "S17" to "GreezeManagerService#freezeProcess",
+    "S18" to "GreezeManagerService#thawProcess",
+    "S19" to "AnrHelper#appNotResponding/deferAppNotResponding",
     "S20" to "GreezeManagerService#thawUid",
     "S21" to "GreezeManagerService#thawUids",
+    "S21_WAKELOCK" to "PowerManagerService#acquireWakeLockInternal",
+    "S22" to "GreezeManagerService#dispatchThawEvent",
+    "S22_KILL" to "ProcessManager#kill",
     "S23" to "GreezeManagerService#freezePids",
+    "S24" to "GreezeManagerService#isAllowBroadcast",
+    "S25" to "GreezeManagerService#deferBroadcastForMiui",
+    "S26" to "GreezeManagerService#thawUidAsync",
+    "S27" to "GreezeManagerService#thawAll",
+    "S28" to "AurogonImmobulusMode#isUidValid",
+    "S29" to "GreezeManagerService#checkStateForScrOff",
+    "S30" to "GreezeManagerService#notifyExcuteServices",
+    "S31" to "AurogonImmobulusMode#updateTargetList",
     "S32_CLOUD_FROZEN_WL" to "ListAppsManager#dealCloudWhiteList",
+    "S33_POLICY_ALLOW_FREEZE" to "PolicyMaker#isAllowFreeze",
+    "S34" to "DeviceIdleController#isUpcomingAlarmClock",
     "S38_DOZE_BECOME_ACTIVE" to "DeviceIdleController#becomeActiveLocked",
     "S39_DOZE_STEP_IDLE" to "DeviceIdleController#stepIdleStateLocked",
+    "S40_DOZE_EVENT" to "DeviceIdleController#addEvent",
 )
 
 private fun describeHookId(id: String): String {
@@ -466,19 +529,79 @@ fun generateHookDiagnostics(
     } else {
         HookDiagnosticLevel.FAILED
     }
+    val dozeObservation = runtimeStatus.hookCoverage.capability(HookCoverage.CAP_DOZE_OBS)
+    val dozeMissing = runtimeStatus.hookCoverage.missingOf(RomCapabilities.DOZE_OBSERVATION_HOOKS)
+    val dozeObservationText = when (dozeObservation) {
+        true -> "深睡观测点 S14/S38/S39/S40 齐备。"
+        false -> "深睡观测点缺 ${dozeMissing.joinToString("、") { describeHookId(it) }}，会话与维护次数可能漏记。"
+        null -> "深睡观测点未上报。"
+    }
+    val dozeSummary = when {
+        dozeLevel != HookDiagnosticLevel.PASSED -> "待捕获"
+        dozeObservation == false -> "实例已捕获 · 观测点缺失 ${dozeMissing.size} 项"
+        dozeObservation == true -> "实例已捕获 · 观测点齐备"
+        else -> "实例已捕获"
+    }
+    // 最近一次主动深睡的结果由 system_server 经运行状态事务带回，
+    // 失败时直接在检查页展示原因，无需读取 /data/system/XMillet/log。
+    val dozeFailureHint = runtimeStatus.dozeDiagnostics
+        ?.takeIf { it.lastAttemptFailed }
+        ?.let { diagnostics ->
+            val detail = diagnostics.failureDetail.ifBlank { "状态机拒绝了深睡" }
+            val age = diagnostics.failureAgeText(System.currentTimeMillis())
+            if (age == null) detail else "$detail（$age）"
+        }
+    // 仅在熄屏状态或存在阻塞约束时展示实时状态，亮屏且无阻塞时不追加提示。
+    val liveDoze = runtimeStatus.liveDoze
+    val liveDozeHint = liveDoze
+        ?.takeIf { !it.screenOn || it.blockingConstraints > 0 }
+        ?.summarySuffix()
+    val liveDozeDetail = liveDoze?.let {
+        buildString {
+            append("实时：${it.stateName}")
+            if (it.forced) append(" · 强制标记")
+            append(if (it.screenOn) " · 亮屏" else " · 熄屏")
+            append(if (it.charging) " · 充电" else " · 未充电")
+            append(" · 阻塞 ${it.blockingConstraints}")
+            if (it.blockerNames.isNotEmpty()) append("（${it.blockerNames.joinToString("、")}）")
+        }
+    }
+    val dozeSummaryText = buildList {
+        add(dozeSummary)
+        liveDozeHint?.let { add(it) }
+        if (dozeFailureHint != null) add("上次深睡未成功")
+    }.joinToString(" · ")
     entries.add(
         HookDiagnosticEntry(
             id = "doze_controller",
             title = "Doze 状态机与省电优化白名单",
             targetClassOrMethod = "com.android.server.DeviceIdleController",
             level = dozeLevel,
-            summaryText = if (dozeLevel == HookDiagnosticLevel.PASSED) "实例已捕获" else "待捕获",
-            detailText = if (dozeLevel == HookDiagnosticLevel.PASSED)
-                "DeviceIdleController 实例已捕获；本项不证明状态迁移或名单同步行为已验证，也不能替代冻结证据。"
-            else
-                "DeviceIdleController 待捕获。",
-            suggestion = if (dozeLevel == HookDiagnosticLevel.PASSED) null
-                else "点「重新检测」；仍待捕获时用「热重载」重装 system_server 钩子，无需重启"
+            summaryText = dozeSummaryText,
+            detailText = buildString {
+                if (dozeLevel == HookDiagnosticLevel.PASSED) {
+                    append("DeviceIdleController 实例已捕获，$dozeObservationText")
+                    append("本项不证明状态迁移或名单同步行为已验证，也不能替代冻结证据。")
+                } else {
+                    append("DeviceIdleController 待捕获。")
+                }
+                liveDozeDetail?.let { append(it) }
+                if (dozeFailureHint != null) append("最近一次深睡失败：$dozeFailureHint")
+            },
+            suggestion = when {
+                dozeLevel != HookDiagnosticLevel.PASSED ->
+                    "点「重新检测」；仍待捕获时用「热重载」重装 system_server 钩子，无需重启"
+                dozeFailureHint != null ->
+                    "最近一次深睡失败：$dozeFailureHint。10 分钟内有系统闹钟、正在充电或官方省电策略未放行都会拦下深睡，" +
+                        "排除后点「重新检测」；反复被闹钟窗口拦下时可在「Doze 深度睡眠策略」开启「闹钟后补试深睡」。"
+                liveDoze != null && liveDoze.blockingConstraints > 0 ->
+                    "当前有 ${liveDoze.blockingConstraints} 项约束在拦深睡" +
+                        if (liveDoze.blockerNames.isEmpty()) "，可到「Doze 深度睡眠策略」检查开关。"
+                        else "（${liveDoze.blockerNames.joinToString("、")}），熄屏后仍被拦住时优先排查这几项，" +
+                            "或在「Doze 深度睡眠策略」开启「闹钟后补试深睡」。"
+                else -> null
+            },
+            suggestionWhenPassed = dozeFailureHint != null || (liveDoze?.blockingConstraints ?: 0) > 0,
         )
     )
 
@@ -626,14 +749,16 @@ private fun buildCoverageEntry(
         }
         val unsupported = coverage.unsupportedIds
         if (unsupported.isNotEmpty()) {
-            append("。本版本没有对应宿主类/方法而跳过：").append(unsupported.joinToString("、"))
+            append("。本版本没有对应宿主类/方法而跳过：")
+                .append(unsupported.joinToString("、") { describeHookId(it) })
         }
         val gated = coverage.gatedIds
         if (gated.isNotEmpty()) {
-            append("。版本门控不满足而跳过：").append(gated.joinToString("、"))
+            append("。版本门控不满足而跳过：")
+                .append(gated.joinToString("、") { describeHookId(it) })
         }
         if (failed.isNotEmpty()) {
-            append("。安装时报错：").append(failed.joinToString("、"))
+            append("。安装时报错：").append(failed.joinToString("、") { describeHookId(it) })
         }
         if (bothSidesReported && installed == total && unsupported.isEmpty() && gated.isEmpty() && failed.isEmpty()) {
             append("。上报点位均已注册，尚未验证各项运行行为。")
@@ -659,7 +784,7 @@ private fun buildCoverageEntry(
         summaryText = "$installed/$total 个安装点已注册",
         detailText = detail,
         suggestion = when {
-            failed.isNotEmpty() -> "安装报错点位：${failed.joinToString("、")}，可点左上角复制报告或查看 /data/system/XMillet/log"
+            failed.isNotEmpty() -> "安装报错点位：${failed.joinToString("、") { describeHookId(it) }}，可点左上角复制报告或查看 /data/system/XMillet/log"
             !bothSidesReported -> "核对系统侧与电量与性能侧的完整安装账本（若刚装包，可点热重载或结束电量与性能重连）"
             else -> null
         },
