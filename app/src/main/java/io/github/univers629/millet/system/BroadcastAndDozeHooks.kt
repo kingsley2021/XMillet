@@ -12,6 +12,7 @@ import android.os.HandlerThread
 import android.os.PowerManager
 import android.os.Process
 import android.os.SystemClock
+import io.github.univers629.millet.BuildConfig
 import io.github.univers629.millet.core.ActiveImeTracker
 import io.github.univers629.millet.core.AppUidUtils
 import io.github.univers629.millet.core.ConditionalDozeLifecycle
@@ -28,6 +29,7 @@ import io.github.univers629.millet.core.PrefReader
 import io.github.univers629.millet.core.PrefsDefaults
 import io.github.univers629.millet.core.PrefsKeys
 import io.github.univers629.millet.core.VersionGate
+import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
 
@@ -90,6 +92,9 @@ object BroadcastAndDozeHooks {
 
     /** 是否由本模块设置了浅睡强制（补试前需要先撤掉，否则 `permitsForce` 恒为 false）。 */
     private var dozeLightFallbackActive: Boolean = false
+
+    /** 调试构建里用来模拟「深睡被拒」的标记文件，消费一次即删除。 */
+    private const val DEBUG_DOZE_FAIL_MARKER = "/data/system/XMillet/debug_doze_fail"
 
     private val receiverLifecycleLock = Any()
 
@@ -833,6 +838,18 @@ object BroadcastAndDozeHooks {
     private fun enterDeepDozeLocked(): Boolean {
         val attemptWall = System.currentTimeMillis()
         DozeDiagnostics.onAttempt(attemptWall)
+        if (consumeDebugDozeFailure()) {
+            Logger.alwaysWarn("调试：按调试标记模拟深睡被拒")
+            DozeDiagnostics.onFailure(attemptWall, "调试标记：模拟深睡被拒")
+            val (debugLightCode, debugLightOut) = execIdleShellCommand("force-idle", "light")
+            if (debugLightCode == 0) {
+                dozeLightFallbackActive = true
+                Logger.alwaysWarn("浅度睡眠成功（深睡被系统拒绝）")
+                return true
+            }
+            Logger.alwaysWarn("浅度睡眠失败 $debugLightOut")
+            return false
+        }
         val (code, out) = execIdleShellCommand("force-idle", "deep")
         if (code == 0) {
             DozeDiagnostics.onSuccess(System.currentTimeMillis())
@@ -874,6 +891,19 @@ object BroadcastAndDozeHooks {
         }
         Logger.alwaysWarn("浅度睡眠失败 $lightOut")
         return false
+    }
+
+    /**
+     * 调试用的「模拟深睡被拒」入口。
+     *
+     * 仅 debug 构建启用的一次性标记文件，用于在深睡未被 ROM 拒绝时触发补试分支：
+     * 存在即删除并返回 true，release 构建恒为 false。
+     */
+    private fun consumeDebugDozeFailure(): Boolean {
+        if (!BuildConfig.DEBUG) return false
+        val marker = File(DEBUG_DOZE_FAIL_MARKER)
+        if (!marker.exists()) return false
+        return runCatching { marker.delete() }.getOrDefault(false)
     }
 
     /**
