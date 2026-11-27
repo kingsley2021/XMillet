@@ -34,6 +34,20 @@ object HookDecisions {
         forceIdle == true && (state == STATE_QUICK_DOZE_DELAY || state == STATE_INACTIVE)
 
     /**
+     * S40：`DeviceIdleController#addEvent` 的事件码折算成深度睡眠状态。
+     *
+     * `EVENT_DEEP_IDLE(4)` 与 `EVENT_DEEP_MAINTENANCE(5)` 是 ROM 自己记录的深度事件，
+     * `EVENT_NORMAL(1)` 表示回到活动态；浅睡事件（2/3）与空事件（0）不需要参与深度统计，
+     * 返回 null 让调用方直接丢弃。
+     */
+    fun dozeEventToState(eventCode: Int): Int? = when (eventCode) {
+        4 -> 5
+        5 -> 6
+        1 -> 0
+        else -> null
+    }
+
+    /**
      * P7/P8：PowerKeeper 同步 Doze 白名单时，是否放行这一次改动。
      *
      * `unrestrictedInDatabase` 取自 PowerKeeper `userTable.bgControl`，是系统设置里「省电策略」

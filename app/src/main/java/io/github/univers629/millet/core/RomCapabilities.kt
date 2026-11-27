@@ -142,6 +142,7 @@ object RomCapabilities {
         val hasActiveCtrl = hasClass(CLASS_ACTIVE_STATE_CONTROLLER, loader)
         val capabilities = capabilityMap(loader) + mapOf(
             "millet_registered" to installed.containsAll(setOf("P2", "P9", "P10", "P17")),
+            "doze_obs" to installed.containsAll(DOZE_OBSERVATION_HOOKS),
             "controller_registered" to resolveControllerRegistered(
                 installed = installed,
                 hasFrozenController = hasFrozenCtrl,
@@ -216,4 +217,12 @@ object RomCapabilities {
     private const val CLASS_ACTIVE_STATE_CONTROLLER =
         "com.miui.powerkeeper.controller.ActiveStateController"
     private const val CLASS_MIGARD_SERVICE = "com.miui.server.migard.MiGardService"
+
+    /** 深度睡眠统计依赖的观测点位：任一缺失都会让会话或维护次数漏记。 */
+    internal val DOZE_OBSERVATION_HOOKS = setOf(
+        "S14",
+        "S38_DOZE_BECOME_ACTIVE",
+        "S39_DOZE_STEP_IDLE",
+        "S40_DOZE_EVENT"
+    )
 }

@@ -53,6 +53,12 @@ data class HookCoverage(
      */
     fun capability(key: String): Boolean? = capabilities[key]
 
+    fun missingOf(ids: Collection<String>): List<String> {
+        if (ids.isEmpty()) return emptyList()
+        val skipped = (unsupportedIds + gatedIds + failedIds).toSet()
+        return ids.filter { it in skipped }
+    }
+
     /**
      * 形如 `42/48` 的覆盖比；没有数据时返回 null，调用方据此显示「未知」。
      */
@@ -78,6 +84,9 @@ data class HookCoverage(
         const val CAP_FROZEN_CTRL = "frozen_ctrl"
         const val CAP_MIGARD = "migard"
         const val CAP_BWA = "bwa"
+
+        /** 深度睡眠统计的观测点位是否齐备（S14/S38/S39/S40），缺失时统计会漏记。 */
+        const val CAP_DOZE_OBS = "doze_obs"
 
         val EMPTY = HookCoverage()
 

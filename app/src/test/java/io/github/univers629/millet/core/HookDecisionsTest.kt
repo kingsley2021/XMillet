@@ -25,6 +25,19 @@ class HookDecisionsTest {
     }
 
     @Test
+    fun `dozeEventToState keeps only deep and normal events`() {
+        // ROM 记录的深度事件：4=IDLE(5)、5=IDLE_MAINTENANCE(6)、1=回到活动态(0)。
+        assertEquals(5, HookDecisions.dozeEventToState(4))
+        assertEquals(6, HookDecisions.dozeEventToState(5))
+        assertEquals(0, HookDecisions.dozeEventToState(1))
+        // 浅睡事件（2/3）与空事件（0）不参与深度统计。
+        assertNull(HookDecisions.dozeEventToState(0))
+        assertNull(HookDecisions.dozeEventToState(2))
+        assertNull(HookDecisions.dozeEventToState(3))
+        assertNull(HookDecisions.dozeEventToState(9))
+    }
+
+    @Test
     fun `allowPowerSaveMutation follows the choice stored in the database`() {
         // 库里是「无限制」：放行添加，拦截自动移除。
         assertTrue(HookDecisions.allowPowerSaveMutation(isAdd = true, unrestrictedInDatabase = true))
