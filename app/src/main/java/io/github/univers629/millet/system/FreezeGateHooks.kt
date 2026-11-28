@@ -12,7 +12,6 @@ import io.github.univers629.millet.core.HookMode
 import io.github.univers629.millet.core.HookSpec
 import io.github.univers629.millet.core.InterceptRule
 import io.github.univers629.millet.core.Logger
-import io.github.univers629.millet.core.NoRestrictSync
 import io.github.univers629.millet.core.PrefReader
 import io.github.univers629.millet.core.PrefsKeys
 import io.github.univers629.millet.core.PrefsSnapshot
@@ -141,19 +140,14 @@ object FreezeGateHooks {
             if (ctx != null) {
                 BroadcastAndDozeHooks.registerScreenStatusReceiver(ctx)
                 FreezeStatsRecorder.registerScreenReceiver(ctx)
+                ModuleCleanupManager.registerUninstallReceiver(ctx)
             }
 
             // Greeze 刚就绪：把「强制冻结」名单真正推下去（澎湃 3.0 没有 MilletPolicy 后唯一的下发通道）
             ForceFreezeBridge.applyAsync(force = true)
 
-            // 同时把白名单同步进系统免冻结名单，开机后 millet 内核侧就不会再冻结这些应用
-            val syncCtx = ctx
-            Thread(
-                {
-                    NoRestrictSync.sync(syncCtx, PrefReader.activePrefs().whiteAppSet)
-                },
-                "XMillet-NoRestrictSync"
-            ).start()
+            // 一次性回收旧版本写入的 xmillet_no_restrict_written 及对应系统键；无旧键时直接返回
+            ModuleCleanupManager.scheduleLegacyMigration(ctx)
         }
     )
 

@@ -13,6 +13,7 @@ import io.github.univers629.millet.powerkeeper.PowerKeeperHooks
 import io.github.univers629.millet.powerkeeper.PowerKeeperState
 import io.github.univers629.millet.system.BroadcastAndDozeHooks
 import io.github.univers629.millet.system.FreezeStatsRecorder
+import io.github.univers629.millet.system.ModuleCleanupManager
 import io.github.univers629.millet.system.SystemHooks
 import io.github.univers629.millet.system.SystemState
 
@@ -96,6 +97,7 @@ class ModernHookEntry : XposedModule() {
             ROLE_SYSTEM_SERVER, ROLE_PACKAGE_SYSTEM -> SystemHooks.onHotReloading()
             ROLE_POWERKEEPER -> runCatching { PowerKeeperHooks.onHotReloading() }
         }
+        ModernHookInstaller.clearTrackedHandles()
         Logger.onHotReloading()
         return true
     }
@@ -176,10 +178,12 @@ class ModernHookEntry : XposedModule() {
             // 4. 安装 system_server 侧全部安装点
             SystemHooks.installAllModern(this, classLoader)
 
-            // 5. 热重载会摘掉广播接收器，重装后立刻补回来，避免亮灭屏与充电事件断链
+            // 5. 热重载会摘掉广播接收器，重装后立刻补回来，避免亮灭屏、充电与卸载清理事件断链，并触发旧键迁移
             SystemState.systemContext?.let { ctx ->
                 runCatching { BroadcastAndDozeHooks.registerScreenStatusReceiver(ctx) }
                 runCatching { FreezeStatsRecorder.registerScreenReceiver(ctx) }
+                runCatching { ModuleCleanupManager.registerUninstallReceiver(ctx) }
+                runCatching { ModuleCleanupManager.scheduleLegacyMigration(ctx) }
             }
         } catch (t: Throwable) {
             Logger.error("Modern Hook bootstrapSystemServer Failure [$scene]: ${t.message}", t)

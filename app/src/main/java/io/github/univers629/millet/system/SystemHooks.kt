@@ -2,15 +2,17 @@ package io.github.univers629.millet.system
 
 import android.content.Intent
 import android.content.IntentFilter
+import android.os.Binder
 import android.os.Bundle
+import android.os.Process
 import io.github.libxposed.api.XposedInterface
 import io.github.univers629.millet.core.ActiveImeTracker
+import io.github.univers629.millet.core.AppUidUtils
 import io.github.univers629.millet.core.HookInstallRegistry
 import io.github.univers629.millet.core.HookMode
 import io.github.univers629.millet.core.HookSpec
 import io.github.univers629.millet.core.Logger
 import io.github.univers629.millet.core.ModernHookInstaller
-import io.github.univers629.millet.core.NoRestrictSync
 import io.github.univers629.millet.core.PrefGroup
 import io.github.univers629.millet.core.PrefReader
 import io.github.univers629.millet.core.PrefsKeys
@@ -90,15 +92,6 @@ object SystemHooks {
                         PrefsKeys.BLOCK_THAW_SET,
                         PrefsKeys.IGNORE_NETWORK_WAKE_SET,
                         "*" -> SystemState.syncMessageAppsToAurogon()
-                    }
-                    if (changedKey == PrefsKeys.WHITE_APP_SET) {
-                        // 白名单变化后把条目同步进系统免冻结名单，避免 millet 内核侧再次冻结它们
-                        Thread(
-                            {
-                                NoRestrictSync.sync(SystemState.systemContext, snapshot.whiteAppSet)
-                            },
-                            "XMillet-NoRestrictSync"
-                        ).start()
                     }
                     if (changedKey == PrefsKeys.FORCE_FREEZE_SET) {
                         // 名单变化后立刻重下发，不必等下一次亮灭屏或重启
@@ -204,6 +197,7 @@ object SystemHooks {
      * 热重载卸载前回收 system_server 侧的输入法观察者、亮灭屏/电量广播接收器、定时统计及 Binder 客户端回调。
      */
     fun onHotReloading() {
+        runCatching { ModuleCleanupManager.unregisterUninstallReceiver() }
         runCatching { FreezeStatsRecorder.onHotReloading() }
         runCatching { ActiveImeTracker.onHotReloading() }
         runCatching { BroadcastAndDozeHooks.onHotReloading() }
@@ -247,6 +241,11 @@ object SystemHooks {
         before = { param ->
             val filter = param.args.firstNotNullOfOrNull { it as? IntentFilter } ?: return@HookSpec
             if (filter.hasAction(MilletIpcContract.ACTION_XMILLET_BINDER)) {
+                val callingUid = Binder.getCallingUid()
+                if (!isAuthorizedBinderHandshakeUid(callingUid)) {
+                    Logger.alwaysWarn("S1: 拒绝未授权进程握手请求: uid=$callingUid")
+                    return@HookSpec
+                }
                 val bundle = Bundle()
                 for ((key, binder) in SystemBinderService.binderMap) {
                     bundle.putBinder(key, binder)
@@ -259,4 +258,19 @@ object SystemHooks {
             }
         }
     )
+
+    private fun isAuthorizedBinderHandshakeUid(callingUid: Int): Boolean {
+        if (callingUid == Process.SYSTEM_UID || callingUid == Process.ROOT_UID) return true
+        if (AppUidUtils.userIdOf(callingUid) != AppUidUtils.PRIMARY_USER_ID) return false
+        val token = Binder.clearCallingIdentity()
+        return try {
+            val pm = SystemState.systemContext?.packageManager ?: return false
+            val pkgs = pm.getPackagesForUid(callingUid) ?: return false
+            pkgs.any { it == PrefsKeys.MODULE_PACKAGE || it == "com.miui.powerkeeper" }
+        } catch (_: Throwable) {
+            false
+        } finally {
+            Binder.restoreCallingIdentity(token)
+        }
+    }
 }

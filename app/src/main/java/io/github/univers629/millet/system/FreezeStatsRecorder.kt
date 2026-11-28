@@ -1250,7 +1250,14 @@ class FreezeStatsEngine(
         )
     }
 
-    fun reset(): Boolean {
+    @Volatile
+    private var persistencePaused: Boolean = false
+
+    fun setPersistencePaused(paused: Boolean) {
+        persistencePaused = paused
+    }
+
+    fun reset(persist: Boolean = true): Boolean {
         val now = statsTime()
         lock.withLock {
             if (deferredRestore != null) return false
@@ -1271,13 +1278,20 @@ class FreezeStatsEngine(
             recentCount = 0
             baselineSinceMillis = now
             bootSinceMillis = now
-            markDirtyLocked()
+            if (persist && !persistencePaused) {
+                markDirtyLocked()
+            } else {
+                dirty = false
+                mutationSeq++
+            }
         }
-        val executor = asyncIoExecutor
-        if (executor != null) {
-            executor { saveIfDirty() }
-        } else {
-            saveIfDirty()
+        if (persist && !persistencePaused) {
+            val executor = asyncIoExecutor
+            if (executor != null) {
+                executor { saveIfDirty() }
+            } else {
+                saveIfDirty()
+            }
         }
         return true
     }
@@ -1285,6 +1299,7 @@ class FreezeStatsEngine(
     // ==================== 持久化与恢复 ====================
 
     fun saveIfDirty(forceFlush: Boolean = false): Boolean {
+        if (persistencePaused) return false
         val snapshotPair = lock.withLock {
             val now = statsTime()
             if (deferredRestore != null) return false
@@ -1298,6 +1313,7 @@ class FreezeStatsEngine(
             }
             mutationSeq to exportPersistedStateLocked(now)
         }
+        if (persistencePaused) return false
         val written = writeStoragePayload(FreezeStatsCodec.encodeStorage(snapshotPair.second))
         if (written) {
             lock.withLock {
@@ -2243,8 +2259,16 @@ object FreezeStatsRecorder {
         return engine.buildSnapshot(window)
     }
 
-    fun reset(): Boolean {
-        return engine.reset()
+    fun reset(persist: Boolean = true): Boolean {
+        return engine.reset(persist = persist)
+    }
+
+    fun pausePersistenceForCleanup() {
+        engine.setPersistencePaused(true)
+    }
+
+    fun resumePersistenceAfterCleanup() {
+        engine.setPersistencePaused(false)
     }
 
     @SuppressLint("UnspecifiedRegisterReceiverFlag")

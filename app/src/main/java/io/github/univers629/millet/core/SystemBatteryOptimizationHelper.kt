@@ -26,15 +26,24 @@ object SystemBatteryOptimizationHelper {
      */
     suspend fun setAppIgnoringBatteryOptimization(
         context: Context,
-        packageName: String
+        packageName: String,
+        recordJournal: Boolean = true,
     ): Boolean = withContext(Dispatchers.IO) {
         if (packageName.isBlank()) return@withContext false
+        val previousNoRestrict = if (recordJournal) {
+            BatteryPolicyHelper.isPackageNoRestrict(context, packageName)
+        } else {
+            false
+        }
 
         // 1. 模块在系统进程里，直接写，无需 Root
         val viaModule = runCatching {
             PowerKeeperBinderClient.applyBatteryPolicy(packageName, noRestrict = true)
         }.getOrNull()
         if (viaModule == true) {
+            if (recordJournal) {
+                BatteryPolicyJournal.recordApplied(context, packageName, previousNoRestrict, newNoRestrict = true)
+            }
             Logger.info("省电策略已由模块写入无限制: $packageName")
             return@withContext true
         }
@@ -49,6 +58,9 @@ object SystemBatteryOptimizationHelper {
             updateMilletNoRestrictSetting(context, packageName, add = true)
             isInNoRestrictSetting(context, packageName)
         }.getOrDefault(false)
+        if (viaRoot && recordJournal) {
+            BatteryPolicyJournal.recordApplied(context, packageName, previousNoRestrict, newNoRestrict = true)
+        }
         if (!viaRoot) {
             Logger.warn("写入系统省电策略失败（模块未接管且 Root 授权不可用）: $packageName")
         }
@@ -60,14 +72,23 @@ object SystemBatteryOptimizationHelper {
      */
     suspend fun restoreAppBatteryOptimizationToDefault(
         context: Context,
-        packageName: String
+        packageName: String,
+        recordJournal: Boolean = true,
     ): Boolean = withContext(Dispatchers.IO) {
         if (packageName.isBlank()) return@withContext false
+        val previousNoRestrict = if (recordJournal) {
+            BatteryPolicyHelper.isPackageNoRestrict(context, packageName)
+        } else {
+            true
+        }
 
         val viaModule = runCatching {
             PowerKeeperBinderClient.applyBatteryPolicy(packageName, noRestrict = false)
         }.getOrNull()
         if (viaModule == true) {
+            if (recordJournal) {
+                BatteryPolicyJournal.recordApplied(context, packageName, previousNoRestrict, newNoRestrict = false)
+            }
             Logger.info("省电策略已由模块恢复默认: $packageName")
             return@withContext true
         }
@@ -81,6 +102,9 @@ object SystemBatteryOptimizationHelper {
             updateMilletNoRestrictSetting(context, packageName, add = false)
             !isInNoRestrictSetting(context, packageName)
         }.getOrDefault(false)
+        if (viaRoot && recordJournal) {
+            BatteryPolicyJournal.recordApplied(context, packageName, previousNoRestrict, newNoRestrict = false)
+        }
         if (!viaRoot) {
             Logger.warn("恢复系统省电策略失败（模块未接管且 Root 授权不可用）: $packageName")
         }

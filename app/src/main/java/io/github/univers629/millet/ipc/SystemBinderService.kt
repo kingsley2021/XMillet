@@ -7,13 +7,13 @@ import android.os.IBinder
 import android.os.Parcel
 import android.os.Process
 import android.os.RemoteException
+import io.github.univers629.millet.core.AppUidUtils
 import io.github.univers629.millet.core.DozeDiagnostics
 import io.github.univers629.millet.core.FreezeStatsCodec
 import io.github.univers629.millet.core.HookDecisions
 import io.github.univers629.millet.core.HookInstallRegistry
 import io.github.univers629.millet.core.Logger
 import io.github.univers629.millet.core.ModernBridge
-import io.github.univers629.millet.core.NoRestrictSync
 import io.github.univers629.millet.core.PrefReader
 import io.github.univers629.millet.core.PrefsKeys
 import io.github.univers629.millet.core.RomCapabilities
@@ -22,6 +22,7 @@ import io.github.univers629.millet.system.BatteryPolicyApplier
 import io.github.univers629.millet.system.BroadcastAndDozeHooks
 import io.github.univers629.millet.system.FreezeStatsRecorder
 import io.github.univers629.millet.system.KernelFreezerDetector
+import io.github.univers629.millet.system.ModuleCleanupManager
 import io.github.univers629.millet.system.ProcessSnapshotProvider
 import io.github.univers629.millet.system.SystemState
 import java.util.concurrent.ConcurrentHashMap
@@ -79,6 +80,11 @@ class SystemBinderService : Binder() {
 
                 MilletIpcContract.TX_NOTIFY_PREF_CHANGED -> {
                     data.enforceInterface(MilletIpcContract.DESCRIPTOR_SYSTEM_SERVICE)
+                    if (!isAuthorizedModuleCaller()) {
+                        Logger.alwaysWarn("拒绝未授权进程调用 TX_NOTIFY_PREF_CHANGED: uid=${Binder.getCallingUid()}")
+                        reply?.writeException(SecurityException("Unauthorized caller"))
+                        return true
+                    }
                     val changedKey = data.readString()
                     if (!changedKey.isNullOrEmpty()) {
                         handlePrefChanged(changedKey)
@@ -91,7 +97,6 @@ class SystemBinderService : Binder() {
                     data.enforceInterface(MilletIpcContract.DESCRIPTOR_SYSTEM_SERVICE)
                     val incoming = data.readString() ?: ""
                     noRestrictAppsSnapshot = incoming
-                    resyncNoRestrictIfDropped(incoming)
                     reply?.writeNoException()
                     true
                 }
@@ -156,6 +161,11 @@ class SystemBinderService : Binder() {
 
                 MilletIpcContract.TX_THAW_ALL_FROZEN -> {
                     data.enforceInterface(MilletIpcContract.DESCRIPTOR_SYSTEM_SERVICE)
+                    if (!isAuthorizedModuleCaller()) {
+                        Logger.alwaysWarn("拒绝未授权进程调用 TX_THAW_ALL_FROZEN: uid=${Binder.getCallingUid()}")
+                        reply?.writeException(SecurityException("Unauthorized caller"))
+                        return true
+                    }
                     val thawedCount = SystemState.thawAllFrozenUids()
                     reply?.writeNoException()
                     reply?.writeInt(thawedCount)
@@ -164,6 +174,11 @@ class SystemBinderService : Binder() {
 
                 MilletIpcContract.TX_APPLY_BATTERY_POLICY -> {
                     data.enforceInterface(MilletIpcContract.DESCRIPTOR_SYSTEM_SERVICE)
+                    if (!isAuthorizedModuleCaller()) {
+                        Logger.alwaysWarn("拒绝未授权进程调用 TX_APPLY_BATTERY_POLICY: uid=${Binder.getCallingUid()}")
+                        reply?.writeException(SecurityException("Unauthorized caller"))
+                        return true
+                    }
                     val pkg = data.readString()
                     val noRestrict = data.readInt() == 1
                     val applied = if (pkg.isNullOrEmpty()) {
@@ -205,6 +220,11 @@ class SystemBinderService : Binder() {
 
                 MilletIpcContract.TX_RESET_FREEZE_STATS -> {
                     data.enforceInterface(MilletIpcContract.DESCRIPTOR_SYSTEM_SERVICE)
+                    if (!isAuthorizedModuleCaller()) {
+                        Logger.alwaysWarn("拒绝未授权进程调用 TX_RESET_FREEZE_STATS: uid=${Binder.getCallingUid()}")
+                        reply?.writeException(SecurityException("Unauthorized caller"))
+                        return true
+                    }
                     val resetOk = FreezeStatsRecorder.reset()
                     reply?.writeNoException()
                     reply?.writeInt(if (resetOk) 1 else 0)
@@ -237,11 +257,62 @@ class SystemBinderService : Binder() {
                     true
                 }
 
+                MilletIpcContract.TX_CLEANUP_RESIDUE -> {
+                    data.enforceInterface(MilletIpcContract.DESCRIPTOR_SYSTEM_SERVICE)
+                    if (!isAuthorizedModuleCaller()) {
+                        Logger.alwaysWarn("拒绝未授权进程调用 TX_CLEANUP_RESIDUE: uid=${Binder.getCallingUid()}")
+                        reply?.writeException(SecurityException("Unauthorized caller"))
+                        return true
+                    }
+                    val revertCount = data.readInt().coerceIn(0, MilletIpcContract.MAX_CLEANUP_BATTERY_REVERTS)
+                    val reverts = LinkedHashMap<String, Boolean>(revertCount)
+                    repeat(revertCount) {
+                        val pkg = data.readString()
+                        val targetNoRestrict = data.readInt() != 0
+                        if (!pkg.isNullOrBlank() && AppUidUtils.validPolicyTarget(pkg) && '#' !in pkg) {
+                            reverts[pkg] = targetNoRestrict
+                        }
+                    }
+                    val deleteDataDir = if (data.dataAvail() >= 4) data.readInt() != 0 else true
+                    val pausePersistence = if (data.dataAvail() >= 4) data.readInt() != 0 else false
+                    val report = ModuleCleanupManager.performManualCleanup(
+                        context = SystemState.systemContext,
+                        batteryReverts = reverts,
+                        deleteDataDir = deleteDataDir,
+                        pausePersistence = pausePersistence,
+                    )
+                    reply?.writeNoException()
+                    reply?.writeInt(if (report.ok) 1 else 0)
+                    reply?.writeInt(report.revertedBatteryCount)
+                    reply?.writeInt(report.removedNoRestrictCount)
+                    reply?.writeInt(report.deletedFilesCount)
+                    reply?.writeInt(if (report.dozeReleased) 1 else 0)
+                    true
+                }
+
                 else -> super.onTransact(code, data, reply, flags)
             }
         } catch (t: Throwable) {
             Logger.error("SystemBinderService onTransact(code=$code) failed", t)
             false
+        }
+    }
+
+    /**
+     * 校验调用方是否为本模块主用户 App、system_server 或 root，防止第三方应用伪造特权 Binder 事务。
+     */
+    private fun isAuthorizedModuleCaller(): Boolean {
+        val callingUid = Binder.getCallingUid()
+        if (callingUid == Process.SYSTEM_UID || callingUid == Process.ROOT_UID) return true
+        if (AppUidUtils.userIdOf(callingUid) != AppUidUtils.PRIMARY_USER_ID) return false
+        val token = Binder.clearCallingIdentity()
+        return try {
+            val pm = SystemState.systemContext?.packageManager ?: return false
+            pm.getPackagesForUid(callingUid)?.contains(PrefsKeys.MODULE_PACKAGE) == true
+        } catch (_: Throwable) {
+            false
+        } finally {
+            Binder.restoreCallingIdentity(token)
         }
     }
 
@@ -318,6 +389,10 @@ class SystemBinderService : Binder() {
         if (clientName == MilletIpcContract.CLIENT_POWER_KEEPER && SystemState.isGreezeReady) {
             postReloadTask {
                 BroadcastAndDozeHooks.applyStartupSync()
+            }
+            SystemState.systemContext?.let { ctx ->
+                ModuleCleanupManager.registerUninstallReceiver(ctx)
+                ModuleCleanupManager.scheduleLegacyMigration(ctx)
             }
         }
     }
@@ -538,25 +613,6 @@ class SystemBinderService : Binder() {
             val service = SystemBinderService()
             binderMap[key] = service
             return service
-        }
-
-        /**
-         * 当 PowerKeeper 重建 `MILLET_NO_RESTRICT_APP`（澎湃 3.0 ActiveStateController#dealNoRestrictApp）
-         * 并把快照上报回来时，若模块白名单中的包被宿主清掉了，则在后台补回并刷新快照。
-         */
-        private fun resyncNoRestrictIfDropped(incomingSnapshot: String) {
-            if (!SystemState.isGreezeReady) return
-            val whiteApps = PrefReader.activePrefs().whiteAppSet
-            if (whiteApps.isEmpty()) return
-            val present = NoRestrictSync.split(incomingSnapshot)
-            if (whiteApps.all { it in present }) return
-            postReloadTask {
-                val ctx = SystemState.systemContext ?: return@postReloadTask
-                val latestWhiteApps = PrefReader.activePrefs().whiteAppSet
-                if (NoRestrictSync.sync(ctx, latestWhiteApps)) {
-                    noRestrictAppsSnapshot = NoRestrictSync.readSystemList(ctx).joinToString(", ")
-                }
-            }
         }
 
         /**

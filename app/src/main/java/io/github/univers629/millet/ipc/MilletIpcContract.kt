@@ -44,8 +44,10 @@ object MilletIpcContract {
     const val TX_RESET_FREEZE_STATS = 18      // 重置墓碑统计计数与持久文件 -> int(1=成功)
     const val TX_GET_DUAL_APPS = 19           // 查询双开空间 (user 999) 已安装应用清单 -> String (`pkg|uid|flags`)
     const val TX_QUERY_UID_PACKAGES = 20     // 批量查询完整 UID 的成员包名，只读
+    const val TX_CLEANUP_RESIDUE = 21        // 卸载前清理残留（释放 Doze、回收旧键、按需还原省电策略、删除 /data/system/XMillet）
 
     const val MAX_UID_PACKAGES_QUERY = 512
+    const val MAX_CLEANUP_BATTERY_REVERTS = 512
 
     // TX_QUERY_UID_PACKAGES：请求 int[]（完整 UID，去重后最多 512 个）；响应 int 成功项数，
     // 随后逐项写 int UID + StringList 包名。查询失败的 UID 不写入，成功无成员写空列表。

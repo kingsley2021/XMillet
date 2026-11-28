@@ -94,6 +94,61 @@ object Logger {
         thread?.quitSafely()
     }
 
+    /**
+     * 暂停本地文件写入、关闭句柄并删除 `/data/system/XMillet/` 目录及内部文件。
+     *
+     * @param pauseLocalWrite true 保持本地落盘关闭（用于「清理并卸载」或真实卸载）；
+     *                        false 删除磁盘目录后恢复正常落盘（用于「仅执行清理」且未因 SELinux 降级时）。
+     * @param permanentDisable true 用于卸载自清理，同时退出日志 IO 线程。
+     * @return 实际删除的文件数量
+     */
+    fun suspendLocalWriteAndDeleteDir(
+        pauseLocalWrite: Boolean,
+        permanentDisable: Boolean = false,
+    ): Int {
+        val threadToQuit: HandlerThread?
+        localWriteDisabled = true
+        synchronized(ioLock) {
+            ioHandler?.removeCallbacks(flushRunnable)
+            flushScheduled = false
+            if (permanentDisable) {
+                hotReloading = true
+                ioHandler = null
+                threadToQuit = ioThread
+                ioThread = null
+            } else {
+                threadToQuit = null
+            }
+        }
+        val deleted = synchronized(fileOpLock) {
+            closeLocalWriter()
+            localWrittenBytes = 0L
+            deleteLocalDirRecursively(File(LOCAL_LOG_DIR))
+        }
+        if (!pauseLocalWrite && !permanentDisable && !localWriteDegraded) {
+            localWriteDisabled = false
+        }
+        threadToQuit?.quitSafely()
+        return deleted
+    }
+
+    internal fun deleteLocalDirRecursively(dir: File): Int {
+        if (!dir.exists()) return 0
+        var deleted = 0
+        val children = dir.listFiles()
+        if (children != null) {
+            for (child in children) {
+                deleted += if (child.isDirectory) {
+                    deleteLocalDirRecursively(child)
+                } else {
+                    if (child.delete()) 1 else 0
+                }
+            }
+        }
+        dir.delete()
+        return deleted
+    }
+
     private fun currentSnapshot(): PrefsSnapshot {
         return PrefReader.activePrefs()
     }
@@ -176,25 +231,28 @@ object Logger {
      */
     fun initSystemLogRotation() {
         postIoTask {
-            closeLocalWriter()
-            localWrittenBytes = 0L
-            try {
-                val dir = File(LOCAL_LOG_DIR)
-                if (!dir.exists()) {
-                    dir.mkdirs()
+            synchronized(fileOpLock) {
+                if (localWriteDisabled) return@synchronized
+                closeLocalWriter()
+                localWrittenBytes = 0L
+                try {
+                    val dir = File(LOCAL_LOG_DIR)
+                    if (!dir.exists()) {
+                        dir.mkdirs()
+                    }
+                    val lastFile = File(LOCAL_LAST_LOG_PATH)
+                    val logFile = File(LOCAL_LOG_PATH)
+                    if (lastFile.exists()) {
+                        lastFile.delete()
+                    }
+                    if (logFile.exists()) {
+                        logFile.renameTo(lastFile)
+                    }
+                    if (!logFile.exists()) {
+                        logFile.createNewFile()
+                    }
+                } catch (_: Throwable) {
                 }
-                val lastFile = File(LOCAL_LAST_LOG_PATH)
-                val logFile = File(LOCAL_LOG_PATH)
-                if (lastFile.exists()) {
-                    lastFile.delete()
-                }
-                if (logFile.exists()) {
-                    logFile.renameTo(lastFile)
-                }
-                if (!logFile.exists()) {
-                    logFile.createNewFile()
-                }
-            } catch (_: Throwable) {
             }
         }
     }
@@ -293,23 +351,30 @@ object Logger {
         }
     }
 
-    // ===== 以下状态仅在 XMillet-LogIo 单线程内访问，无需加锁 =====
+    // ===== 本地文件写入状态（由 fileOpLock 保护，与清理目录操作互斥） =====
+    private val fileOpLock = Any()
     private const val MAX_LOCAL_LOG_BYTES = 2L * 1024 * 1024
     private const val FLUSH_DELAY_MS = 1500L
     private var localWriter: java.io.BufferedWriter? = null
     private var localWrittenBytes = 0L
     private var flushScheduled = false
-    /** 本地文件不可写（如 SELinux 拒绝）时彻底关闭本地落盘，只保留 LSPosed 输出。 */
+    /** 本地文件因 SELinux 或文件系统异常永久降级标记。 */
+    @Volatile
+    private var localWriteDegraded = false
+    /** 本地文件不可写（如 SELinux 拒绝）或已清理暂停时关闭本地落盘，只保留 LSPosed 输出。 */
+    @Volatile
     private var localWriteDisabled = false
     private val localTimeFormat by lazy { SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.CHINA) }
     private val reusableDate = Date()
 
     private val flushRunnable = Runnable {
         flushScheduled = false
-        try {
-            localWriter?.flush()
-        } catch (_: Throwable) {
-            closeLocalWriter()
+        synchronized(fileOpLock) {
+            try {
+                localWriter?.flush()
+            } catch (_: Throwable) {
+                closeLocalWriter()
+            }
         }
     }
 
@@ -330,7 +395,8 @@ object Logger {
     /** 本地落盘不可用时降级一次并关闭写入，避免后续每行都触发文件系统调用。 */
     private fun degradeLocalWrite() {
         closeLocalWriter()
-        if (localWriteDisabled) return
+        if (localWriteDegraded) return
+        localWriteDegraded = true
         localWriteDisabled = true
         Logger.alwaysWarn("本地日志写入失败（可能被 SELinux 拒绝），已降级为仅 LSPosed 输出")
     }
@@ -358,26 +424,29 @@ object Logger {
 
     private fun appendLineToLocalFile(eventTimeMs: Long, level: Level, body: String) {
         if (localWriteDisabled) return
-        try {
-            rotateLocalLogIfNeeded()
-            val writer = openLocalWriter() ?: run {
+        synchronized(fileOpLock) {
+            if (localWriteDisabled) return
+            try {
+                rotateLocalLogIfNeeded()
+                val writer = openLocalWriter() ?: run {
+                    degradeLocalWrite()
+                    return
+                }
+                reusableDate.time = eventTimeMs
+                val line = "${localTimeFormat.format(reusableDate)} [${level.code}] $body\n"
+                writer.write(line)
+                // 近似字节数（中文按 3 字节估算），仅用于触发轮转
+                localWrittenBytes += line.length * 3L
+                if (level == Level.ERROR) {
+                    writer.flush()
+                } else if (!flushScheduled) {
+                    flushScheduled = true
+                    ioHandler?.postDelayed(flushRunnable, FLUSH_DELAY_MS)
+                }
+            } catch (_: Throwable) {
+                // 本地文件写入失败（含 SELinux 拒绝）时彻底降级，避免每行重复重试
                 degradeLocalWrite()
-                return
             }
-            reusableDate.time = eventTimeMs
-            val line = "${localTimeFormat.format(reusableDate)} [${level.code}] $body\n"
-            writer.write(line)
-            // 近似字节数（中文按 3 字节估算），仅用于触发轮转
-            localWrittenBytes += line.length * 3L
-            if (level == Level.ERROR) {
-                writer.flush()
-            } else if (!flushScheduled) {
-                flushScheduled = true
-                ioHandler?.postDelayed(flushRunnable, FLUSH_DELAY_MS)
-            }
-        } catch (_: Throwable) {
-            // 本地文件写入失败（含 SELinux 拒绝）时彻底降级，避免每行重复重试
-            degradeLocalWrite()
         }
     }
 }

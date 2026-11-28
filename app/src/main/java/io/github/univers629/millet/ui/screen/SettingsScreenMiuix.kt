@@ -54,11 +54,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import androidx.navigationevent.NavigationEventInfo
 import androidx.navigationevent.compose.NavigationBackHandler
 import androidx.navigationevent.compose.rememberNavigationEventState
+import io.github.univers629.millet.core.BatteryPolicyJournal
 import io.github.univers629.millet.core.PrefsKeys
+import io.github.univers629.millet.ui.util.ModuleCleanupHelper
 import io.github.univers629.millet.ui.BackupRestoreHelper
 import io.github.univers629.millet.ui.component.DialogBackHandler
 import io.github.univers629.millet.ui.component.MiuixConfirmDialog
@@ -114,6 +117,7 @@ import top.yukonga.miuix.kmp.icon.extended.Backup
 import top.yukonga.miuix.kmp.icon.extended.Import
 import top.yukonga.miuix.kmp.icon.extended.Info
 import top.yukonga.miuix.kmp.icon.glass.Backup
+import top.yukonga.miuix.kmp.icon.glass.Clear
 import top.yukonga.miuix.kmp.icon.glass.Download
 import top.yukonga.miuix.kmp.icon.glass.Import
 import top.yukonga.miuix.kmp.icon.glass.Reset
@@ -215,6 +219,7 @@ fun SettingsContent(
     var showRebootNotice by remember { mutableStateOf(false) }
 
     var showResetConfirmDialog by remember { mutableStateOf(false) }
+    var showCleanupSheet by remember { mutableStateOf(false) }
     var showSendLogDialog by remember { mutableStateOf(false) }
     var showBackupDialog by remember { mutableStateOf(false) }
     var showConfigMenu by remember { mutableStateOf(false) }
@@ -702,6 +707,34 @@ fun SettingsContent(
                     }
                 },
                 onReset = { showResetConfirmDialog = true },
+                onCleanupResidue = { showCleanupSheet = true },
+            )
+            CleanupResidueSheet(
+                show = showCleanupSheet,
+                onDismissRequest = { showCleanupSheet = false },
+                onRunCleanup = { revertBattery, launchUninstall ->
+                    showCleanupSheet = false
+                    configScope.launch {
+                        isLoading = true
+                        try {
+                            val result = ModuleCleanupHelper.runCleanup(
+                                context = context,
+                                revertBatteryPolicies = revertBattery,
+                                pausePersistence = launchUninstall,
+                            )
+                            Toast.makeText(context, result.summary, Toast.LENGTH_LONG).show()
+                            if (result.success && launchUninstall) {
+                                val uninstallIntent = Intent(
+                                    Intent.ACTION_DELETE,
+                                    Uri.parse("package:${context.packageName}")
+                                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                runCatching { context.startActivity(uninstallIntent) }
+                            }
+                        } finally {
+                            isLoading = false
+                        }
+                    }
+                },
             )
             SendLogDialog(
                 show = showSendLogDialog,
@@ -944,6 +977,7 @@ private fun ConfigActionsDialog(
     onShare: () -> Unit,
     onExport: () -> Unit,
     onReset: () -> Unit,
+    onCleanupResidue: () -> Unit,
 ) {
     // 与「运行环境与服务检测」同款底部面板：GlassBottomSheet 采样全局弹窗背景源，
     // 关闭背景模糊时 PopupBackdropHolder 为 null，面板自动回退为不透明底色。
@@ -1013,6 +1047,10 @@ private fun ConfigActionsDialog(
                     onDismissRequest()
                     onReset()
                 }
+                ConfigActionRow("清理系统残留（卸载前）", MiuixIcons.Glass.Clear) {
+                    onDismissRequest()
+                    onCleanupResidue()
+                }
             }
 
             Spacer(Modifier.height(14.dp))
@@ -1029,6 +1067,108 @@ private fun ConfigActionsDialog(
                         dismissState?.invoke()
                     },
                     modifier = Modifier.weight(1f)
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun CleanupResidueSheet(
+    show: Boolean,
+    onDismissRequest: () -> Unit,
+    onRunCleanup: (revertBatteryPolicies: Boolean, launchUninstall: Boolean) -> Unit,
+) {
+    val context = LocalContext.current
+    val trackedBatteryCount = remember(show) {
+        if (show) BatteryPolicyJournal.readAll(context).size else 0
+    }
+    var revertBattery by remember(show) { mutableStateOf(trackedBatteryCount > 0) }
+    val scrollState = rememberScrollState()
+    val configuration = LocalConfiguration.current
+    val bodyMaxHeight = (configuration.screenHeightDp.dp * 0.56f).coerceIn(220.dp, 460.dp)
+
+    GlassBottomSheet(
+        backdrop = PopupBackdropHolder.current,
+        show = show,
+        title = "清理系统残留",
+        insideMargin = DpSize(20.dp, 8.dp),
+        progressiveBlur = false,
+        endAction = {
+            val dismissState = LocalDismissState.current
+            IconButton(
+                onClick = {
+                    onDismissRequest()
+                    dismissState?.invoke()
+                },
+            ) {
+                Icon(
+                    imageVector = MiuixIcons.Close,
+                    contentDescription = "关闭",
+                    tint = colorScheme.onBackground,
+                )
+            }
+        },
+        onDismissRequest = onDismissRequest,
+    ) { innerPadding ->
+        val dismissState = LocalDismissState.current
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(bottom = 12.dp),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = bodyMaxHeight)
+                    .verticalScroll(scrollState)
+                    .padding(innerPadding),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text(
+                    text = "此操作将清除系统侧 /data/system/XMillet/ 日志与统计文件、回收旧版免冻结记账键，并解除当前强制 Doze 状态。",
+                    fontSize = 13.5.sp,
+                    lineHeight = 20.sp,
+                    color = colorScheme.onSurfaceVariantSummary,
+                )
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    SwitchPreference(
+                        title = "还原经由本模块修改的系统省电策略",
+                        summary = if (trackedBatteryCount > 0) {
+                            "已记录 $trackedBatteryCount 个应用的修改前原始策略，还原时保留用户自行设置的条目"
+                        } else {
+                            "当前未记录经由本模块改动过的系统省电策略"
+                        },
+                        checked = revertBattery,
+                        enabled = trackedBatteryCount > 0,
+                        onCheckedChange = { revertBattery = it },
+                    )
+                }
+            }
+
+            Spacer(Modifier.height(16.dp))
+
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                TextButton(
+                    text = "仅执行清理",
+                    onClick = {
+                        dismissState?.invoke()
+                        onRunCleanup(revertBattery, false)
+                    },
+                    modifier = Modifier.weight(1f),
+                )
+                TextButton(
+                    text = "清理并卸载",
+                    onClick = {
+                        dismissState?.invoke()
+                        onRunCleanup(revertBattery, true)
+                    },
+                    modifier = Modifier.weight(1f),
+                    colors = top.yukonga.miuix.kmp.basic.ButtonDefaults.textButtonColorsPrimary(),
                 )
             }
         }

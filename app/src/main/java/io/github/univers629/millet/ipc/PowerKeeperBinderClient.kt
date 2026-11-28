@@ -686,6 +686,58 @@ object PowerKeeperBinderClient {
         }
     }
 
+    data class CleanupResidueReport(
+        val ok: Boolean,
+        val revertedBatteryCount: Int,
+        val removedNoRestrictCount: Int,
+        val deletedFilesCount: Int,
+        val dozeReleased: Boolean,
+    )
+
+    /**
+     * 触发 system_server 侧卸载前残留清理（事务码 21）。
+     *
+     * @return 清理报告；系统服务未连接或旧版本模块不支持该事务码时返回 null
+     */
+    fun cleanupResidue(
+        batteryReverts: Map<String, Boolean>,
+        deleteDataDir: Boolean = true,
+        pausePersistence: Boolean = false,
+    ): CleanupResidueReport? {
+        val binder = remoteSystemBinder ?: return null
+        val data = Parcel.obtain()
+        val reply = Parcel.obtain()
+        return try {
+            val capped = batteryReverts.entries.take(MilletIpcContract.MAX_CLEANUP_BATTERY_REVERTS)
+            data.writeInterfaceToken(MilletIpcContract.DESCRIPTOR_SYSTEM_SERVICE)
+            data.writeInt(capped.size)
+            for ((pkg, targetNoRestrict) in capped) {
+                data.writeString(pkg)
+                data.writeInt(if (targetNoRestrict) 1 else 0)
+            }
+            data.writeInt(if (deleteDataDir) 1 else 0)
+            data.writeInt(if (pausePersistence) 1 else 0)
+            if (!binder.transact(MilletIpcContract.TX_CLEANUP_RESIDUE, data, reply, 0) || reply.dataAvail() < 4) {
+                return null
+            }
+            reply.readException()
+            if (reply.dataAvail() < 20) return null
+            CleanupResidueReport(
+                ok = reply.readInt() != 0,
+                revertedBatteryCount = reply.readInt(),
+                removedNoRestrictCount = reply.readInt(),
+                deletedFilesCount = reply.readInt(),
+                dozeReleased = reply.readInt() != 0,
+            )
+        } catch (t: Throwable) {
+            Logger.error("cleanupResidue failed", t)
+            null
+        } finally {
+            reply.recycle()
+            data.recycle()
+        }
+    }
+
     /**
      * 读取 system_server 实时运行状态与当前冻结 UID 列表（事务码 10）。
      */

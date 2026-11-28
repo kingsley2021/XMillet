@@ -1076,6 +1076,14 @@ object BroadcastAndDozeHooks {
         if (!PrefReader.systemPrefs.enableDoze || hotReloading) releaseDeepDozeLocked("config")
     }
 
+    /** 清理残留或卸载前显式取消延时闹钟并解除强制 Doze。 */
+    fun releaseDozeForCleanup(): Boolean = withDozeLock {
+        dozeLifecycle.cancel()
+        cancelDeepDozeAlarmLocked()
+        releaseDeepDozeLocked("cleanup")
+        controllerBoolean("mForceIdle") != true
+    }
+
     /**
      * 排期进入深睡。
      *

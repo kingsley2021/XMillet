@@ -46,34 +46,41 @@ object BatteryPolicyApplier {
      * P7/P8 拦截 PowerKeeper 自动增删白名单时，如果这一列显示用户想要的方向，
      * 就应当放行，否则会出现「设置成无限制 → 白名单没同步 → 下次进页面又被改回智能推荐」。
      */
-    internal fun readBgControls(packages: Collection<String>): Map<String, String> {
+    internal fun readBgControls(packages: Collection<String>): Map<String, String> =
+        readBgControlsOrNull(packages).orEmpty()
+
+    /**
+     * 读取 PowerKeeper `userTable.bgControl`；返回 `null` 表示系统上下文或 PowerKeeper ContentProvider
+     * 尚未就绪（或查询失败），与「查询成功但无匹配行（空 Map）」明确区分。
+     */
+    internal fun readBgControlsOrNull(packages: Collection<String>): Map<String, String>? {
         if (packages.isEmpty()) return emptyMap()
-        val context = SystemState.systemContext ?: return emptyMap()
+        val context = SystemState.systemContext ?: return null
         val token = Binder.clearCallingIdentity()
         return try {
             val placeholders = packages.joinToString(",") { "?" }
-            val result = HashMap<String, String>(packages.size)
-            context.contentResolver.query(
+            val cursor = context.contentResolver.query(
                 Uri.parse(PK_USER_TABLE_URI),
                 arrayOf(COL_PKG_NAME, COL_BG_CONTROL),
                 "$COL_PKG_NAME IN ($placeholders)",
                 packages.toTypedArray(),
                 null
-            )?.use { cursor ->
-                val pkgIndex = cursor.getColumnIndex(COL_PKG_NAME)
-                val bgIndex = cursor.getColumnIndex(COL_BG_CONTROL)
-                if (pkgIndex >= 0 && bgIndex >= 0) {
-                    while (cursor.moveToNext()) {
-                        val pkg = cursor.getString(pkgIndex)
-                        val bg = cursor.getString(bgIndex)
-                        if (pkg != null && bg != null) result[pkg] = bg
-                    }
+            ) ?: return null
+            cursor.use { c ->
+                val pkgIndex = c.getColumnIndex(COL_PKG_NAME)
+                val bgIndex = c.getColumnIndex(COL_BG_CONTROL)
+                if (pkgIndex < 0 || bgIndex < 0) return null
+                val result = HashMap<String, String>(packages.size)
+                while (c.moveToNext()) {
+                    val pkg = c.getString(pkgIndex)
+                    val bg = c.getString(bgIndex)
+                    if (pkg != null && bg != null) result[pkg] = bg
                 }
+                result
             }
-            result
         } catch (t: Throwable) {
             Logger.warn("读取 PowerKeeper 配置库失败: ${t.javaClass.simpleName}: ${t.message}")
-            emptyMap()
+            null
         } finally {
             Binder.restoreCallingIdentity(token)
         }

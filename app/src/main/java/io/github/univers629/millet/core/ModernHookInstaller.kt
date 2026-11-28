@@ -3,11 +3,14 @@ package io.github.univers629.millet.core
 import io.github.libxposed.api.XposedInterface
 import java.lang.reflect.Executable
 import java.lang.reflect.Method
+import java.util.concurrent.CopyOnWriteArrayList
 
 /**
  * 基于现代化 LibXposed API 102 的 Hook 安装引擎。
  */
 object ModernHookInstaller {
+
+    private val installedHandles = CopyOnWriteArrayList<XposedInterface.HookHandle>()
 
     @Volatile
     private var activeSessionInstalled: MutableSet<Pair<String?, Executable>>? = null
@@ -16,7 +19,30 @@ object ModernHookInstaller {
      * 开启一次热重载安装记账会话，收集本轮重新挂载的 `(id, executable)` 以便对旧句柄做无空窗原子替换。
      */
     fun beginHotReloadSession() {
+        installedHandles.clear()
         activeSessionInstalled = HashSet()
+    }
+
+    /**
+     * 热重载卸载旧代前释放本代句柄表引用（不在此处 unhook，由新一代 `finishHotReloadSession` 原子替换）。
+     */
+    fun clearTrackedHandles() {
+        installedHandles.clear()
+    }
+
+    /**
+     * 卸载自清理时摘除本代已安装的全部 Hook 句柄，配合 `XposedModule#detach()` 释放类加载器可达路径。
+     */
+    fun unhookAll(): Int {
+        val snapshot = installedHandles.toList()
+        installedHandles.clear()
+        var removed = 0
+        for (handle in snapshot) {
+            if (runCatching { handle.unhook() }.isSuccess) {
+                removed++
+            }
+        }
+        return removed
     }
 
     /**
@@ -85,7 +111,8 @@ object ModernHookInstaller {
             if (xposed.apiVersion >= XposedInterface.API_102) {
                 builder.setId(spec.id)
             }
-            builder.intercept(buildHooker(spec))
+            val handle = builder.intercept(buildHooker(spec))
+            installedHandles.add(handle)
             activeSessionInstalled?.add(spec.id to executable)
 
             // 目标方法可能已被 JIT 内联进调用方，此时只挂钩子不反优化会「显示已安装但不触发」。
@@ -140,7 +167,7 @@ object ModernHookInstaller {
                     if (xposed.apiVersion >= XposedInterface.API_102) {
                         builder.setId(hookId)
                     }
-                    builder.intercept(object : XposedInterface.Hooker {
+                    val handle = builder.intercept(object : XposedInterface.Hooker {
                             override fun intercept(chain: XposedInterface.Chain): Any? {
                                 val param = UnifiedHookParamImpl(
                                     thisObject = chain.thisObject,
@@ -159,6 +186,7 @@ object ModernHookInstaller {
                                 return chain.proceed()
                             }
                         })
+                    installedHandles.add(handle)
                     activeSessionInstalled?.add(hookId to method)
                     deoptimizeTarget(xposed, method, hookId)
                     hookedCount++
