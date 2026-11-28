@@ -20,7 +20,7 @@ jobs:
           distribution: temurin
           java-version: '21'
 
-      # miuix 0.9.5-rc01 需要 compileSdk 37.2；AGP 会按需自动下载，这里先接受许可
+      # miuix 0.9.5-rc02 需要 compileSdk 37.2；AGP 会按需自动下载，这里先接受许可
       - name: Accept Android SDK licenses
         run: |
           SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"

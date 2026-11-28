@@ -128,7 +128,7 @@ fun MilletTopAppBar(
             subtitle = subtitle,
             scrollBehavior = scrollBehavior,
             bandBrush = band,
-            // 纯色带（关闭模糊 / 整块毛玻璃）不能再向下延伸 36dp 的渐隐带：
+            // 纯色带（关闭模糊 / 整块毛玻璃）不能再向下延伸渐隐带：
             // GlassTopAppBar 对非渐变画刷会把背景按 overhang 纵向拉伸，导致关闭模糊时顶栏比模糊模式高出一截。
             bandOverhang = if (band is SolidColor) 0.dp else GlassTopAppBarDefaults.BandOverhang,
             defaultWindowInsetsPadding = defaultWindowInsetsPadding,

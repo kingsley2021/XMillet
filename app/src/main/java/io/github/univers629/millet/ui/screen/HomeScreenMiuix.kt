@@ -6,6 +6,7 @@ import io.github.univers629.millet.ui.util.BarIconButton
 import android.os.Build
 import android.widget.Toast
 import io.github.univers629.millet.BuildConfig
+import io.github.univers629.millet.R
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -43,6 +44,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.vectorResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
@@ -83,8 +85,6 @@ import top.yukonga.miuix.kmp.icon.MiuixIcons
 import io.github.univers629.millet.ui.component.XMilletIcons
 import top.yukonga.miuix.kmp.icon.glass.Filter
 import top.yukonga.miuix.kmp.icon.glass.MyDevice
-import top.yukonga.miuix.kmp.icon.glass.Processor
-import top.yukonga.miuix.kmp.icon.glass.Tags
 import top.yukonga.miuix.kmp.icon.basic.ArrowRight
 import top.yukonga.miuix.kmp.icon.extended.Info as ExtendedInfo
 import top.yukonga.miuix.kmp.icon.glass.MoreCircle
@@ -721,12 +721,12 @@ private fun SystemInfoCard(
                 .padding(16.dp)
         ) {
             InfoText(
-                icon = MiuixIcons.Glass.Tags,
+                icon = ImageVector.vectorResource(R.drawable.ic_xposed),
                 title = "Xposed API 版本",
                 content = xposedStatus,
             )
             InfoText(
-                icon = MiuixIcons.Glass.Processor,
+                icon = ImageVector.vectorResource(R.drawable.ic_linux),
                 title = "内核版本",
                 content = kernelVer,
             )

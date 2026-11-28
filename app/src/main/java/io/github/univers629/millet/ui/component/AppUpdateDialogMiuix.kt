@@ -1,6 +1,4 @@
 package io.github.univers629.millet.ui.component
-import io.github.univers629.millet.ui.component.ProgressiveDialogLayout
-import top.yukonga.miuix.kmp.overlay.OverlayDialog
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -11,16 +9,12 @@ import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.WindowInsets
-import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.only
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.systemBars
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -30,24 +24,32 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import io.github.univers629.millet.core.AppReleaseInfo
 import io.github.univers629.millet.core.AppUpdateVersionParser
 import io.github.univers629.millet.ui.util.AppUpdateController
 import io.github.univers629.millet.ui.util.AppUpdateDownloadState
+import io.github.univers629.millet.ui.util.PopupBackdropHolder
 import kotlin.math.roundToInt
 import top.yukonga.miuix.kmp.basic.ButtonDefaults
+import top.yukonga.miuix.kmp.basic.Icon
+import top.yukonga.miuix.kmp.basic.IconButton
 import top.yukonga.miuix.kmp.basic.LinearProgressIndicator
 import top.yukonga.miuix.kmp.basic.Text
 import top.yukonga.miuix.kmp.basic.TextButton
+import top.yukonga.miuix.kmp.glass.GlassBottomSheet
+import top.yukonga.miuix.kmp.icon.MiuixIcons
+import top.yukonga.miuix.kmp.icon.extended.Close
+import top.yukonga.miuix.kmp.theme.LocalDismissState
 import top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme
-import top.yukonga.miuix.kmp.window.WindowDialog
 
 /**
- * 新版本更新弹窗（Miuix `WindowDialog` 风格）：
- * 展示版本变化、发布元数据、可滚动更新日志、应用内校验下载进度与浏览器发布页入口。
+ * 新版本更新底部面板（与「运行环境与服务检测」「配置与备份」同款 `GlassBottomSheet`）：
+ * 采样全局弹窗背景源，随「背景模糊」档位在关闭（不透明纯色）与高斯/渐进模糊（液态玻璃）间自动切换。
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -86,17 +88,48 @@ fun AppUpdateDialogMiuix(
         else -> "下载并安装"
     }
 
-    OverlayDialog(
+    val configuration = LocalConfiguration.current
+    val bodyMaxHeight = (configuration.screenHeightDp.dp * 0.56f).coerceIn(220.dp, 460.dp)
+    val scrollState = rememberScrollState()
+
+    GlassBottomSheet(
+        backdrop = PopupBackdropHolder.current,
         show = show,
-        modifier = Modifier.windowInsetsPadding(WindowInsets.systemBars.only(WindowInsetsSides.Top)),
-        onDismissRequest = onDismiss,
-        content = {
-            DialogBackHandler { onDismiss() }
-            ProgressiveDialogLayout(
-                title = "发现新版本",
-                footer = { UpdateDialogFooter(downloading != null, primaryLabel, onCancelDownload, onDismiss, onPrimaryAction, onIgnoreVersion, onOpenReleasePage) },
+        title = "发现新版本",
+        insideMargin = DpSize(20.dp, 8.dp),
+        // 与运行环境检测 / 配置与备份面板一致：顶栏栈式排布，不以浅色带覆盖正文
+        progressiveBlur = false,
+        endAction = {
+            val dismissState = LocalDismissState.current
+            IconButton(
+                onClick = {
+                    onDismiss()
+                    dismissState?.invoke()
+                },
             ) {
-            Column(modifier = Modifier.fillMaxWidth()) {
+                Icon(
+                    imageVector = MiuixIcons.Close,
+                    contentDescription = "关闭",
+                    tint = colorScheme.onBackground,
+                )
+            }
+        },
+        onDismissRequest = onDismiss,
+    ) { innerPadding ->
+        val dismissState = LocalDismissState.current
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .padding(bottom = 12.dp),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = bodyMaxHeight)
+                    .verticalScroll(scrollState)
+                    .padding(innerPadding),
+            ) {
                 Text(
                     text = "v$currentVersionName → v${release.versionName}",
                     fontSize = 14.sp,
@@ -140,8 +173,8 @@ fun AppUpdateDialogMiuix(
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .heightIn(min = 56.dp, max = 220.dp)
-                        .clip(RoundedCornerShape(12.dp))
+                        .heightIn(min = 56.dp, max = 240.dp)
+                        .clip(RoundedCornerShape(14.dp))
                         .background(colorScheme.surfaceContainerHigh)
                         .verticalScroll(rememberScrollState())
                         .padding(12.dp),
@@ -183,11 +216,27 @@ fun AppUpdateDialogMiuix(
                         color = colorScheme.error,
                     )
                 }
+            }
 
-            }
-            }
-        },
-    )
+            Spacer(Modifier.height(16.dp))
+
+            UpdateDialogFooter(
+                isDownloading = downloading != null,
+                primaryLabel = primaryLabel,
+                onCancelDownload = onCancelDownload,
+                onDismiss = {
+                    onDismiss()
+                    dismissState?.invoke()
+                },
+                onPrimaryAction = onPrimaryAction,
+                onIgnoreVersion = {
+                    onIgnoreVersion()
+                    dismissState?.invoke()
+                },
+                onOpenReleasePage = onOpenReleasePage,
+            )
+        }
+    }
 }
 
 @Composable
@@ -251,4 +300,3 @@ private fun UpdateDialogFooter(
         }
     }
 }
-

@@ -29,8 +29,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -364,14 +366,8 @@ class MainActivity : ComponentActivity() {
                 if (floatingBottomBarStyle != 0) 96.dp else 72.dp
 
         val blurBackdrop = rememberBlurBackdrop(enableBlur)
-        val backdrop = rememberLayerBackdrop {
-            drawRect(surfaceColor)
-            drawContent()
-        }
-        val popupBackdrop = rememberLayerBackdrop {
-            drawRect(surfaceColor)
-            drawContent()
-        }
+        val backdrop = rememberLayerBackdrop(backgroundColor = surfaceColor)
+        val popupBackdrop = rememberLayerBackdrop(backgroundColor = surfaceColor)
         SideEffect { PopupBackdropHolder.current = if (enableBlur) popupBackdrop else null }
 
         // 根级 Miuix Scaffold 承载最外层 MiuixPopupHost，确保所有 Tab 的 Dialog / BottomSheet / ListPopup
@@ -393,17 +389,21 @@ class MainActivity : ComponentActivity() {
                 )
             }
 
-            val availableRelease = updateUiState.availableRelease
-            if (!updateNoticeDialog && updateUiState.dialogVisible && availableRelease != null) {
+            var cachedRelease by remember { mutableStateOf(updateUiState.availableRelease) }
+            if (updateUiState.availableRelease != null) {
+                cachedRelease = updateUiState.availableRelease
+            }
+            val displayRelease = updateUiState.availableRelease ?: cachedRelease
+            if (displayRelease != null) {
                 AppUpdateDialogMiuix(
-                    show = true,
+                    show = !updateNoticeDialog && updateUiState.dialogVisible && updateUiState.availableRelease != null,
                     currentVersionName = BuildConfig.VERSION_NAME,
-                    release = availableRelease,
+                    release = displayRelease,
                     downloadState = updateUiState.downloadState,
                     onDismiss = { AppUpdateController.dismissDialog() },
                     onIgnoreVersion = { AppUpdateController.ignoreCurrentRelease(container.uiPrefs) },
                     onOpenReleasePage = {
-                        AppUpdateController.openReleasePage(this@MainActivity, availableRelease.htmlUrl)
+                        AppUpdateController.openReleasePage(this@MainActivity, displayRelease.htmlUrl)
                     },
                     onPrimaryAction = {
                         when (updateUiState.downloadState) {

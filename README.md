@@ -16,7 +16,7 @@
 [<img src="https://github.com/LSPosed.png" height="20" alt="LSPosed">](https://github.com/LSPosed)
 ![LSPosed](https://img.shields.io/badge/LSPosed-API%20102-FF4088?style=flat-square)
 [<img src="https://github.com/compose-miuix-ui.png" height="20" alt="Miuix">](https://github.com/compose-miuix-ui/miuix)
-![Miuix](https://img.shields.io/badge/Miuix-0.9.5--rc01-C9603F?style=flat-square)
+![Miuix](https://img.shields.io/badge/Miuix-0.9.5--rc02-C9603F?style=flat-square)
 
 </div>
 

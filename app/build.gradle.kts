@@ -7,7 +7,7 @@ plugins {
 android {
     namespace = "io.github.univers629.millet"
     compileSdk = 37
-    // miuix 0.9.5-rc01 的 AAR 元数据要求 minCompileSdk=37 + minCompileMinorSdk=2，AGP 9.4 起会校验次版本
+    // miuix 0.9.5-rc02 的 AAR 元数据要求 minCompileSdk=37 + minCompileMinorSdk=2，AGP 9.4 起会校验次版本
     compileSdkMinor = 2
 
     defaultConfig {
@@ -98,15 +98,15 @@ dependencies {
     implementation("androidx.navigationevent:navigationevent:1.2.0")
     implementation("androidx.navigationevent:navigationevent-compose:1.2.0")
 
-    // Miuix KMP UI 组件库、图标、导航、设置项与毛玻璃特效 (0.9.5-rc01)
-    implementation("top.yukonga.miuix.kmp:miuix-ui-android:0.9.5-rc01")
-    implementation("top.yukonga.miuix.kmp:miuix-icons-android:0.9.5-rc01")
-    implementation("top.yukonga.miuix.kmp:miuix-glass-icons-android:0.9.5-rc01")
-    implementation("top.yukonga.miuix.kmp:miuix-nav-android:0.9.5-rc01")
-    implementation("top.yukonga.miuix.kmp:miuix-preference-android:0.9.5-rc01")
-    implementation("top.yukonga.miuix.kmp:miuix-blur-android:0.9.5-rc01")
-    implementation("top.yukonga.miuix.kmp:miuix-material-android:0.9.5-rc01")
-    implementation("top.yukonga.miuix.kmp:miuix-glass-android:0.9.5-rc01")
+    // Miuix KMP UI 组件库、图标、导航、设置项与毛玻璃特效 (0.9.5-rc02)
+    implementation("top.yukonga.miuix.kmp:miuix-ui-android:0.9.5-rc02")
+    implementation("top.yukonga.miuix.kmp:miuix-icons-android:0.9.5-rc02")
+    implementation("top.yukonga.miuix.kmp:miuix-glass-icons-android:0.9.5-rc02")
+    implementation("top.yukonga.miuix.kmp:miuix-nav-android:0.9.5-rc02")
+    implementation("top.yukonga.miuix.kmp:miuix-preference-android:0.9.5-rc02")
+    implementation("top.yukonga.miuix.kmp:miuix-blur-android:0.9.5-rc02")
+    implementation("top.yukonga.miuix.kmp:miuix-material-android:0.9.5-rc02")
+    implementation("top.yukonga.miuix.kmp:miuix-glass-android:0.9.5-rc02")
 
     // 返回栈持久化（rememberNavBackStack 的 JSON 编解码）使用
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.13.0")

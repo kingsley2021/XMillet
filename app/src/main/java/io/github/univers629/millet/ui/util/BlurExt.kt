@@ -23,11 +23,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme
 @Composable
 fun rememberBlurBackdrop(enableBlur: Boolean): LayerBackdrop? {
     if (!enableBlur || !isRenderEffectSupported()) return null
-    val surfaceColor = MiuixTheme.colorScheme.surface
-    return rememberLayerBackdrop {
-        drawRect(surfaceColor)
-        drawContent()
-    }
+    return rememberLayerBackdrop(backgroundColor = MiuixTheme.colorScheme.surface)
 }
 
 @Composable
