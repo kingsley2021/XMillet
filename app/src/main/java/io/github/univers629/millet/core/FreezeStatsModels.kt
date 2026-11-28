@@ -150,133 +150,161 @@ data class FreezeStatsSnapshotData(
 
 /**
  * 解冻/唤醒理由规则判定与分类器（由 Hook 闸门与统计采集器共用，保证语义完全一致）。
+ *
+ * MIUI 14 / HyperOS 1–3 采用空格与驼峰字面量（如 `"Activity Start"`、`"Sync Binder"`），
+ * HyperOS 4（Android 17 `GreezeReason`）全面切换为下划线 `snake_case`（如 `"activity_start"`、`"sync_binder"`）。
+ * 所有判定统一先经 [normalizeReason] 归一化，保证跨代行为一致。
  */
 object FreezeReasonClassifier {
 
-    private val ALLOWED_THAW_EXACT_REASONS: Set<String> = setOf(
-        // 真机逐字命中的 13 项
-        "Activity Front",
-        "Check Binder",
-        "FG activity",
-        "IMMOBULUS",
-        "LAUNCH_MODE",
-        "Net Change",
-        "PACKET",
-        "Signal iso",
-        "Signal other",
-        "Sync Binder",
-        "broadcast",
-        "cmd: thuid",
+    /**
+     * 将解冻原因归一化为小写单空格形式：`_`、`:`、`-` 与空白统一折叠为单个空格。
+     */
+    internal fun normalizeReason(reason: String): String {
+        val sb = StringBuilder(reason.length)
+        var prevSpace = true
+        for (ch in reason) {
+            val mapped = when (ch) {
+                '_', ':', '-', '\t', '\n', '\r' -> ' '
+                else -> ch.lowercaseChar()
+            }
+            if (mapped == ' ') {
+                if (!prevSpace) {
+                    sb.append(' ')
+                    prevSpace = true
+                }
+            } else {
+                sb.append(mapped)
+                prevSpace = false
+            }
+        }
+        if (sb.isNotEmpty() && sb[sb.length - 1] == ' ') {
+            sb.setLength(sb.length - 1)
+        }
+        return sb.toString()
+    }
+
+    private val ALLOWED_NORMALIZED_REASONS: Set<String> = setOf(
+        "immobulus",
+        "launch mode",
+        "fg important",
+        "bf",
+        "same uid",
+        "subprocess",
+        "ime",
         "notifi",
-        // 澎湃 3.0 实机额外命中的解冻理由
-        "Activity Resume",
-        "PendingNotify",
-        "UI bar",
-        "network connect",
-        // 真机 Activity 启动与切换至前台的实际字符串
-        "Activity Start",
-        " Activity Start!",
-        "toFrontActivity",
-        "moveToFront",
-        "notifyMovetoFront",
-        // 兼容旧版字面量
-        "activity start",
-        "tofront",
-        "MediaButton",
-        "receiver pkg",
+        "pendingnotify",
+        "pending notify",
+        "cmd thuid",
+        "cmd thpid",
+        "shell thaw all",
     )
 
-    private val NETWORK_WAKE_REASONS: Set<String> = setOf(
-        "PACKET",
-        "Net Change",
+    private val NETWORK_NORMALIZED_REASONS: Set<String> = setOf(
+        "packet",
+        "net change",
         "network connect",
-        "Signal other",
-        "Signal iso",
+        "signal",
     )
 
     fun isSyncBinderThawReason(reason: String): Boolean {
-        val trimmed = reason.trim()
-        return trimmed.startsWith("Sync Binder", ignoreCase = true) ||
-            trimmed.startsWith("Check Binder", ignoreCase = true)
+        val norm = normalizeReason(reason)
+        return norm.startsWith("sync binder") || norm.startsWith("check binder")
     }
 
     fun isAllowedThawReason(reason: String): Boolean {
-        if (reason in ALLOWED_THAW_EXACT_REASONS) return true
-        val trimmed = reason.trim()
-        if (trimmed in ALLOWED_THAW_EXACT_REASONS) return true
-        return isSyncBinderThawReason(trimmed) ||
-            trimmed.startsWith("broadcast", ignoreCase = true) ||
-            trimmed.startsWith("Signal ", ignoreCase = true) ||
-            trimmed.startsWith("Activity Start", ignoreCase = true) ||
-            trimmed.contains("toFront", ignoreCase = true) ||
-            trimmed.contains("MediaButton", ignoreCase = true) ||
-            trimmed.startsWith("receiver", ignoreCase = true)
+        val norm = normalizeReason(reason)
+        if (norm.isEmpty()) return false
+        return isUserOpenReasonNormalized(norm) ||
+            isSyncBinderNormalized(norm) ||
+            isNetworkWakeNormalized(norm) ||
+            norm in ALLOWED_NORMALIZED_REASONS ||
+            norm.startsWith("broadcast") ||
+            norm.startsWith("bc action") ||
+            norm.startsWith("receiver") ||
+            norm.contains("mediabutton") ||
+            norm.contains("media button")
     }
 
-    fun isToFrontReason(reason: String): Boolean {
-        val trimmed = reason.trim()
-        return trimmed.equals("tofront", ignoreCase = true) ||
-            trimmed.contains("toFront", ignoreCase = true) ||
-            trimmed.startsWith("Activity Front", ignoreCase = true) ||
-            trimmed.startsWith("Activity Start", ignoreCase = true) ||
-            trimmed.equals("Activity Resume", ignoreCase = true)
-    }
+    fun isToFrontReason(reason: String): Boolean =
+        isToFrontNormalized(normalizeReason(reason))
 
-    fun isNetworkWakeReason(reason: String): Boolean {
-        if (reason in NETWORK_WAKE_REASONS) return true
-        val trimmed = reason.trim()
-        if (trimmed in NETWORK_WAKE_REASONS) return true
-        return trimmed.startsWith("Signal ", ignoreCase = true) ||
-            trimmed.equals("network connect", ignoreCase = true)
-    }
+    fun isNetworkWakeReason(reason: String): Boolean =
+        isNetworkWakeNormalized(normalizeReason(reason))
 
     fun isChargeThawReason(reason: String): Boolean {
-        val trimmed = reason.trim()
-        return trimmed.contains("charg", ignoreCase = true) ||
-            trimmed.contains("充电") ||
-            trimmed.equals("CHARGE_CHANGE", ignoreCase = true)
+        val norm = normalizeReason(reason)
+        return norm.contains("charg") || norm.contains("充电")
     }
 
-    fun isScreenOnThawReason(reason: String): Boolean {
-        val trimmed = reason.trim()
-        return trimmed.startsWith("screen on", ignoreCase = true) ||
-            trimmed.startsWith("screen_on", ignoreCase = true)
-    }
+    fun isScreenOnThawReason(reason: String): Boolean =
+        normalizeReason(reason).startsWith("screen on")
 
-    fun isUserOpenReason(reason: String): Boolean {
-        val trimmed = reason.trim()
-        return isToFrontReason(trimmed) ||
-            trimmed.startsWith("Activity Start", ignoreCase = true) ||
-            trimmed.equals("FG activity", ignoreCase = true) ||
-            trimmed.equals("UI bar", ignoreCase = true)
-    }
+    fun isUserOpenReason(reason: String): Boolean =
+        isUserOpenReasonNormalized(normalizeReason(reason))
 
-    fun isBroadcastReason(reason: String): Boolean {
-        val trimmed = reason.trim()
-        return trimmed.equals("broadcast", ignoreCase = true) ||
-            trimmed.equals("notifi", ignoreCase = true) ||
-            trimmed.equals("PendingNotify", ignoreCase = true) ||
-            trimmed.startsWith("receiver", ignoreCase = true) ||
-            trimmed.contains("notify", ignoreCase = true) ||
-            trimmed.contains("notification", ignoreCase = true) ||
-            trimmed.contains("broadcast", ignoreCase = true)
-    }
+    fun isBroadcastReason(reason: String): Boolean =
+        isBroadcastNormalized(normalizeReason(reason))
 
     fun classifyWakeCategory(reason: String): WakeCategory {
-        val trimmed = reason.trim()
-        if (trimmed.isEmpty()) return WakeCategory.OTHER
+        val norm = normalizeReason(reason)
+        if (norm.isEmpty()) return WakeCategory.OTHER
         return when {
-            trimmed.equals("LAUNCH_MODE", ignoreCase = true) -> WakeCategory.LAUNCH_MODE
-            isUserOpenReason(trimmed) -> WakeCategory.USER_OPEN
-            isChargeThawReason(trimmed) -> WakeCategory.CHARGING
-            isScreenOnThawReason(trimmed) -> WakeCategory.SCREEN_ON
-            isSyncBinderThawReason(trimmed) || trimmed.contains("binder", ignoreCase = true) -> WakeCategory.BINDER
-            isBroadcastReason(trimmed) -> WakeCategory.BROADCAST
-            trimmed.equals("PACKET", ignoreCase = true) ||
-                trimmed.equals("Net Change", ignoreCase = true) ||
-                trimmed.equals("network connect", ignoreCase = true) ||
-                trimmed.startsWith("Signal ", ignoreCase = true) -> WakeCategory.NETWORK
+            norm == "launch mode" -> WakeCategory.LAUNCH_MODE
+            isUserOpenReasonNormalized(norm) -> WakeCategory.USER_OPEN
+            norm.contains("charg") || norm.contains("充电") -> WakeCategory.CHARGING
+            norm.startsWith("screen on") -> WakeCategory.SCREEN_ON
+            isSyncBinderNormalized(norm) ||
+                norm == "fg important" ||
+                norm == "bf" ||
+                norm == "same uid" ||
+                norm.contains("binder") -> WakeCategory.BINDER
+            isBroadcastNormalized(norm) -> WakeCategory.BROADCAST
+            isNetworkWakeNormalized(norm) -> WakeCategory.NETWORK
             else -> WakeCategory.OTHER
         }
     }
+
+    private fun isSyncBinderNormalized(norm: String): Boolean =
+        norm.startsWith("sync binder") || norm.startsWith("check binder")
+
+    private fun isToFrontNormalized(norm: String): Boolean =
+        norm.contains("tofront") ||
+            norm.startsWith("activity front") ||
+            norm.startsWith("activity start") ||
+            norm == "activity resume" ||
+            norm == "fg activity" ||
+            norm == "multitask"
+
+    private fun isUserOpenReasonNormalized(norm: String): Boolean =
+        isToFrontNormalized(norm) ||
+            norm == "freeformmode" ||
+            norm == "freeform mode" ||
+            norm == "smallw" ||
+            norm == "small win" ||
+            norm == "focus" ||
+            norm == "ui bar" ||
+            norm == "process start" ||
+            norm == "display on" ||
+            norm == "virtualdisplay" ||
+            norm == "virtual display" ||
+            norm == "carwith cast" ||
+            norm == "app function" ||
+            norm == "keycode"
+
+    private fun isNetworkWakeNormalized(norm: String): Boolean =
+        norm in NETWORK_NORMALIZED_REASONS || norm.startsWith("signal ")
+
+    private fun isBroadcastNormalized(norm: String): Boolean =
+        norm == "broadcast" ||
+            norm == "broadcast cl" ||
+            norm == "bc action" ||
+            norm == "notifi" ||
+            norm == "pendingnotify" ||
+            norm == "pending notify" ||
+            norm == "mipush" ||
+            norm.startsWith("receiver") ||
+            norm.contains("notify") ||
+            norm.contains("notification") ||
+            norm.contains("broadcast")
 }

@@ -64,9 +64,44 @@ object SystemState {
      */
     fun isPackageCurrentlyForeground(packageName: String?): Boolean {
         if (packageName.isNullOrEmpty()) return false
+        if (ForegroundState.isScreenOff) return false
         if (lastToFrontPackage == packageName) return true
         // 快照不可用时按「可能在前台」放行：钩子线程不能为了判定去等待平台锁。
         return ForegroundState.isForeground(packageName) ?: true
+    }
+
+    private class GreezeForegroundFields(
+        val owner: Class<*>,
+        val screenOn: java.lang.reflect.Field?,
+        val topAppUid: java.lang.reflect.Field?,
+        val launchingAppUid: java.lang.reflect.Field?,
+    )
+
+    @Volatile
+    private var greezeForegroundFields: GreezeForegroundFields? = null
+
+    /**
+     * 解冻热路径专用实时前台兜底：亮屏状态下无锁读取 `GreezeManagerService` 的
+     * `mTopAppUid`（MIUI 14–OS4）与 `mLaunchingAppUid`（OS4），避免切回前台时受快照缓存延迟误拦。
+     * 熄屏时返回 false，仅用于解冻放行，不影响冻结判定。
+     */
+    fun isUidGreezeForegroundForThaw(uid: Int): Boolean {
+        if (uid < 10000) return false
+        val greeze = greezeService ?: return false
+        val clazz = greeze.javaClass
+        val fields = greezeForegroundFields?.takeIf { it.owner === clazz } ?: GreezeForegroundFields(
+            owner = clazz,
+            screenOn = XReflect.findFieldOrNull(clazz, "mScreenOnOff")
+                ?: XReflect.findFieldOrNull(clazz, "mScreenOn"),
+            topAppUid = XReflect.findFieldOrNull(clazz, "mTopAppUid"),
+            launchingAppUid = XReflect.findFieldOrNull(clazz, "mLaunchingAppUid"),
+        ).also { greezeForegroundFields = it }
+        val isScreenOn = runCatching { fields.screenOn?.getBoolean(greeze) }.getOrNull()
+        if (isScreenOn == false) return false
+        val topUid = runCatching { fields.topAppUid?.getInt(greeze) }.getOrNull()
+        if (topUid == uid) return true
+        val launchingUid = runCatching { fields.launchingAppUid?.getInt(greeze) }.getOrNull()
+        return launchingUid == uid
     }
 
     /** S2 构造器直接传入的系统 Context 备份 */

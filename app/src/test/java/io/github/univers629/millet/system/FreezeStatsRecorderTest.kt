@@ -70,6 +70,38 @@ class FreezeStatsRecorderTest {
         assertEquals(WakeCategory.SCREEN_ON, FreezeReasonClassifier.classifyWakeCategory("screen on-thawAll"))
         assertEquals(WakeCategory.CHARGING, FreezeReasonClassifier.classifyWakeCategory("battery charging"))
         assertEquals(WakeCategory.OTHER, FreezeReasonClassifier.classifyWakeCategory("IMMOBULUS"))
+
+        // HyperOS 4 snake_case classification parity
+        assertTrue(FreezeReasonClassifier.isToFrontReason("activity_start"))
+        assertTrue(FreezeReasonClassifier.isToFrontReason("activity_front"))
+        assertTrue(FreezeReasonClassifier.isToFrontReason("activity_resume"))
+        assertTrue(FreezeReasonClassifier.isToFrontReason("fg_activity"))
+        assertTrue(FreezeReasonClassifier.isToFrontReason("multitask"))
+        assertFalse(FreezeReasonClassifier.isToFrontReason("freeform_mode"))
+        assertFalse(FreezeReasonClassifier.isToFrontReason("smallw"))
+        assertFalse(FreezeReasonClassifier.isToFrontReason("focus"))
+        assertTrue(FreezeReasonClassifier.isUserOpenReason("freeform_mode"))
+        assertTrue(FreezeReasonClassifier.isUserOpenReason("smallw"))
+        assertTrue(FreezeReasonClassifier.isUserOpenReason("focus"))
+        assertFalse(FreezeReasonClassifier.isToFrontReason("pending_notify"))
+
+        assertTrue(FreezeReasonClassifier.isNetworkWakeReason("packet"))
+        assertTrue(FreezeReasonClassifier.isNetworkWakeReason("signal_iso"))
+        assertTrue(FreezeReasonClassifier.isNetworkWakeReason("signal_other9"))
+        assertTrue(FreezeReasonClassifier.isNetworkWakeReason("network_connect"))
+        assertTrue(FreezeReasonClassifier.isSyncBinderThawReason("sync_binder0"))
+        assertTrue(FreezeReasonClassifier.isSyncBinderThawReason("check_binder"))
+
+        assertEquals(WakeCategory.USER_OPEN, FreezeReasonClassifier.classifyWakeCategory("activity_front"))
+        assertEquals(WakeCategory.USER_OPEN, FreezeReasonClassifier.classifyWakeCategory("multitask"))
+        assertEquals(WakeCategory.LAUNCH_MODE, FreezeReasonClassifier.classifyWakeCategory("launch_mode"))
+        assertEquals(WakeCategory.NETWORK, FreezeReasonClassifier.classifyWakeCategory("packet"))
+        assertEquals(WakeCategory.NETWORK, FreezeReasonClassifier.classifyWakeCategory("signal_other9"))
+        assertEquals(WakeCategory.BINDER, FreezeReasonClassifier.classifyWakeCategory("sync_binder0"))
+        assertEquals(WakeCategory.BINDER, FreezeReasonClassifier.classifyWakeCategory("fg_important"))
+        assertEquals(WakeCategory.BROADCAST, FreezeReasonClassifier.classifyWakeCategory("pending_notify"))
+        assertEquals(WakeCategory.SCREEN_ON, FreezeReasonClassifier.classifyWakeCategory("screen_on"))
+        assertEquals(WakeCategory.OTHER, FreezeReasonClassifier.classifyWakeCategory("immobulus"))
     }
 
     @Test

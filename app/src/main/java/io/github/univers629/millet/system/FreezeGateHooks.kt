@@ -183,12 +183,19 @@ object FreezeGateHooks {
         }
     )
 
-    private fun buildSystemGateContext(uid: Int, pkg: String?): AppGateContext = AppGateContext(
+    private fun buildSystemGateContext(
+        uid: Int,
+        pkg: String?,
+        includeGreezeLiveForeground: Boolean = false,
+    ): AppGateContext = AppGateContext(
         uid = uid,
         packageName = pkg,
         isGreezeReady = SystemState.isGreezeReady,
         isUidFrozen = { SystemState.isUidFrozen(uid) },
-        isCurrentlyForeground = { SystemState.isPackageCurrentlyForeground(pkg) },
+        isCurrentlyForeground = {
+            SystemState.isPackageCurrentlyForeground(pkg) ||
+                (includeGreezeLiveForeground && SystemState.isUidGreezeForegroundForThaw(uid))
+        },
         serviceRoleProvider = {
             if (pkg.isNullOrEmpty()) {
                 ServiceRoleProtection.NONE
@@ -206,7 +213,11 @@ object FreezeGateHooks {
     )
 
     private fun thawInterceptRule(uid: Int, pkg: String?, reason: String, prefs: PrefsSnapshot): InterceptRule? =
-        (GateDecision.decideThaw(buildSystemGateContext(uid, pkg), reason, prefs) as? ThawGateVerdict.Intercept)?.rule
+        (GateDecision.decideThaw(
+            buildSystemGateContext(uid, pkg, includeGreezeLiveForeground = true),
+            reason,
+            prefs,
+        ) as? ThawGateVerdict.Intercept)?.rule
 
     private fun recordThawIntercept(uid: Int, pkg: String?, reason: String, rule: InterceptRule, prefs: PrefsSnapshot) {
         if (prefs.freezeStats) FreezeStatsRecorder.recordIntercept(uid, rule, reason, pkg)
@@ -598,8 +609,8 @@ object FreezeGateHooks {
                 val processName = resolveProcessNameByPid(pid) ?: "pid:$pid"
                 SystemState.recordPidFreezeState(uid, pid, frozen = false, reason = reason)
                 if (!processName.contains("com.google.android.webview") &&
-                    reason != "LAUNCH_MODE" &&
-                    reason != "IMMOBULUS"
+                    !reason.equals("LAUNCH_MODE", ignoreCase = true) &&
+                    !reason.equals("IMMOBULUS", ignoreCase = true)
                 ) {
                     val (frozenCount, totalCount, mapSnapshot) = SystemState.getUidFreezeSummary(uid)
                     Logger.alwaysInfo(
@@ -658,8 +669,12 @@ object FreezeGateHooks {
             beginStats(param, uids.toList(), reason, freeze = false)
             val kept = ArrayList<Int>(uids.size)
             val blocked = ArrayList<Pair<Int, InterceptRule>>()
+            val updateLastToFront = uids.size == 1 && SystemState.isGreezeReady && isToFrontReason(reason)
             for (uid in uids) {
                 val pkg = SystemState.getPackageNameForUid(uid)
+                if (updateLastToFront && !pkg.isNullOrEmpty()) {
+                    SystemState.lastToFrontPackage = pkg
+                }
                 val rule = thawInterceptRule(uid, pkg, reason, prefs)
                 if (rule == null) kept.add(uid) else blocked.add(uid to rule)
             }

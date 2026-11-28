@@ -46,6 +46,10 @@ object ForegroundState {
     @Volatile
     private var screenOn: Boolean? = null
 
+    /** 当前是否明确处于息屏状态。 */
+    val isScreenOff: Boolean
+        get() = screenOn == false
+
     @Volatile
     private var refreshHandler: Handler? = null
 

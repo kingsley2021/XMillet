@@ -263,6 +263,94 @@ class GateDecisionTest {
     }
 
     @Test
+    fun `decideThaw allows HyperOS 4 snake_case and multitask foreground thaws under blockThaw`() {
+        val prefs = PrefsSnapshot(
+            forceFreezeSet = setOf("com.example.app"),
+            blockThawSet = setOf("com.example.app"),
+            forbidSyncBinderSet = setOf("com.example.app"),
+            ignoreNetworkWakeSet = setOf("com.example.app"),
+            disableCharge = true,
+            disableScreenOnThaw = true,
+        )
+        val ctx = AppGateContext(10250, "com.example.app", isUidFrozen = { true })
+
+        val userOpenReasons = listOf(
+            "activity_start",
+            "activity_front",
+            "activity_resume",
+            "fg_activity",
+            "freeform_mode",
+            "FreeformMode",
+            "multitask",
+            "Multitask",
+            "smallw",
+            "small_win",
+            "focus",
+            "ui_bar",
+            "process_start",
+            "process start",
+            "display_on",
+            "Display_On",
+            "VirtualDisplay",
+            "carwith_cast",
+            "app_function",
+            "keycode",
+        )
+        for (reason in userOpenReasons) {
+            assertEquals(
+                "Expected USER_OPEN for reason=$reason",
+                ThawGateVerdict.Allow(ThawAllowReason.USER_OPEN),
+                GateDecision.decideThaw(ctx, reason, prefs),
+            )
+        }
+
+        // HyperOS 4 snake_case sync binder and network wake still hit dedicated rules.
+        assertEquals(
+            ThawGateVerdict.Intercept(InterceptRule.FORBID_SYNC_BINDER),
+            GateDecision.decideThaw(ctx, "sync_binder0", prefs),
+        )
+        assertEquals(
+            ThawGateVerdict.Intercept(InterceptRule.FORBID_SYNC_BINDER),
+            GateDecision.decideThaw(ctx, "check_binder", prefs),
+        )
+        assertEquals(
+            ThawGateVerdict.Intercept(InterceptRule.IGNORE_NETWORK),
+            GateDecision.decideThaw(ctx, "packet", prefs),
+        )
+        assertEquals(
+            ThawGateVerdict.Intercept(InterceptRule.IGNORE_NETWORK),
+            GateDecision.decideThaw(ctx, "signal_other9", prefs),
+        )
+        assertEquals(
+            ThawGateVerdict.Intercept(InterceptRule.IGNORE_NETWORK),
+            GateDecision.decideThaw(ctx, "network_connect", prefs),
+        )
+
+        // Pure blockThaw still suppresses background wakes while allowing foreground binder / same_uid.
+        val blockOnlyPrefs = PrefsSnapshot(blockThawSet = setOf("com.example.app"))
+        assertEquals(
+            ThawGateVerdict.Allow(ThawAllowReason.ALLOWED_BY_POLICY),
+            GateDecision.decideThaw(ctx, "fg_important", blockOnlyPrefs),
+        )
+        assertEquals(
+            ThawGateVerdict.Allow(ThawAllowReason.ALLOWED_BY_POLICY),
+            GateDecision.decideThaw(ctx, "same_uid", blockOnlyPrefs),
+        )
+        assertEquals(
+            ThawGateVerdict.Allow(ThawAllowReason.ALLOWED_BY_POLICY),
+            GateDecision.decideThaw(ctx, "sync_binder0", blockOnlyPrefs),
+        )
+        assertEquals(
+            ThawGateVerdict.Intercept(InterceptRule.BLOCK_THAW),
+            GateDecision.decideThaw(ctx, "execute_service", blockOnlyPrefs),
+        )
+        assertEquals(
+            ThawGateVerdict.Intercept(InterceptRule.BLOCK_THAW),
+            GateDecision.decideThaw(ctx, "mipush", blockOnlyPrefs),
+        )
+    }
+
+    @Test
     fun `decideFreeze and decideThaw isolate dual app user 999`() {
         val prefs = PrefsSnapshot(
             whiteAppSet = setOf("com.example.app"),
